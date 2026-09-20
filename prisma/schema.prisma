@@ -16,8 +16,8 @@ enum MembershipRole {
 
 enum ProjectStatus {
   PLANNING
-  ON_TRACK
-  AT_RISK
+  ACTIVE
+  ON_HOLD
   COMPLETED
   ARCHIVED
 }
@@ -25,7 +25,7 @@ enum ProjectStatus {
 enum TaskStatus {
   TODO
   IN_PROGRESS
-  IN_REVIEW
+  REVIEW
   DONE
 }
 
@@ -102,6 +102,8 @@ model User {
 
   memberships        Membership[]
   createdProjects    Project[]     @relation("ProjectCreator")
+  ownedProjects      Project[]     @relation("ProjectOwner")
+  projectMemberships ProjectMember[]
   createdTasks       Task[]        @relation("TaskCreator")
   assignedTasks      Task[]        @relation("TaskAssignee")
   comments           Comment[]
@@ -109,6 +111,7 @@ model User {
   notifications      Notification[]
   auditLogs          AuditLog[]    @relation("AuditActor")
   sessions           Session[]
+  taskActivities     ActivityHistory[] @relation("ActivityActor")
 }
 
 model Organization {
@@ -121,6 +124,7 @@ model Organization {
 
   memberships        Membership[]
   projects           Project[]
+  projectMembers     ProjectMember[]
   tasks              Task[]
   comments           Comment[]
   documents          Document[]
@@ -133,6 +137,8 @@ model Organization {
   subscription       Subscription?
   usage              Usage[]
   sessions           Session[]     @relation("SessionOrganization")
+  taskDependencies  TaskDependency[]
+  activityHistory   ActivityHistory[]
 }
 
 model Membership {
@@ -171,20 +177,28 @@ model Project {
   id             String        @id @default(uuid()) @db.Uuid
   organizationId String        @db.Uuid
   creatorId      String?       @db.Uuid
+  ownerId        String?       @db.Uuid
   name           String
   description    String        @default("")
   status         ProjectStatus @default(PLANNING)
   priority       Priority      @default(MEDIUM)
   progress       Int           @default(0)
+  archivedAt     DateTime?
+  startAt        DateTime?
+  dueAt          DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   creator      User?        @relation("ProjectCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  owner        User?        @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   tasks        Task[]
+  members      ProjectMember[]
+  activities   ActivityHistory[]
 
   @@index([organizationId])
   @@index([creatorId])
+  @@index([ownerId])
   @@index([organizationId, status])
 }
 
@@ -199,7 +213,11 @@ model Task {
   status         TaskStatus @default(TODO)
   priority       Priority   @default(MEDIUM)
   dueAt          DateTime?
+  estimatedMinutes Int?
   labels         String[]
+  position       Float          @default(0)
+  parentId       String?        @db.Uuid
+  archivedAt     DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
@@ -208,11 +226,70 @@ model Task {
   creator      User?        @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: SetNull)
   assignee     User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   comments     Comment[]
+  parent       Task?       @relation("TaskSubtasks", fields: [parentId], references: [id], onDelete: Cascade)
+  subtasks     Task[]      @relation("TaskSubtasks")
+  dependencies TaskDependency[] @relation("TaskDependencies")
+  dependents   TaskDependency[] @relation("TaskDependents")
+  activities   ActivityHistory[]
 
   @@index([organizationId])
   @@index([projectId])
   @@index([assigneeId])
   @@index([organizationId, status])
+  @@index([projectId, position])
+  @@index([parentId])
+}
+
+model ProjectMember {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  projectId      String   @db.Uuid
+  userId         String   @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user         User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([organizationId])
+  @@index([userId])
+}
+
+model TaskDependency {
+  id            String   @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  taskId        String   @db.Uuid
+  dependsOnId   String   @db.Uuid
+  createdAt     DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  task         Task @relation("TaskDependencies", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn    Task @relation("TaskDependents", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnId])
+  @@index([organizationId])
+  @@index([dependsOnId])
+}
+
+model ActivityHistory {
+  id            String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  taskId        String?  @db.Uuid
+  projectId     String?  @db.Uuid
+  actorId       String?  @db.Uuid
+  action        String
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  task         Task? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  project      Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actor        User? @relation("ActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([taskId, createdAt])
+  @@index([projectId, createdAt])
 }
 
 model Comment {

@@ -43,6 +43,8 @@ async function main() {
   await prisma.session.deleteMany()
   await prisma.auditLog.deleteMany()
   await prisma.notification.deleteMany()
+  await prisma.activityHistory.deleteMany()
+  await prisma.taskDependency.deleteMany()
   await prisma.comment.deleteMany()
   await prisma.task.deleteMany()
   await prisma.project.deleteMany()
@@ -124,7 +126,7 @@ async function main() {
         creatorId: alex.id,
         name: 'Atlas Platform',
         description: 'Payments and AI platform launch.',
-        status: ProjectStatus.AT_RISK,
+        status: ProjectStatus.ON_HOLD,
         priority: Priority.HIGH,
         progress: 74,
       },
@@ -134,7 +136,7 @@ async function main() {
         creatorId: alex.id,
         name: 'Nexus Mobile',
         description: 'Mobile experience for distributed teams.',
-        status: ProjectStatus.ON_TRACK,
+        status: ProjectStatus.ACTIVE,
         priority: Priority.MEDIUM,
         progress: 48,
       },
@@ -144,7 +146,7 @@ async function main() {
         creatorId: morgan.id,
         name: 'Website Redesign',
         description: 'Refresh the public marketing site.',
-        status: ProjectStatus.ON_TRACK,
+        status: ProjectStatus.ACTIVE,
         priority: Priority.LOW,
         progress: 91,
       },
