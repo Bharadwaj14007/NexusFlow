@@ -1,0 +1,20 @@
+import { z } from 'zod'
+
+export const projectStatusSchema = z.enum(['PLANNING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'ARCHIVED'])
+export const taskStatusSchema = z.enum(['TODO', 'IN_PROGRESS', 'REVIEW', 'DONE'])
+export const prioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT'])
+const id = z.string().uuid()
+
+export const projectQuerySchema = z.object({ search: z.string().trim().optional(), status: projectStatusSchema.optional(), sort: z.enum(['updatedAt', 'createdAt', 'name', 'priority']).default('updatedAt'), includeArchived: z.boolean().default(false) })
+export const createProjectSchema = z.object({ name: z.string().trim().min(3).max(120), description: z.string().trim().max(2000).default(''), status: projectStatusSchema.default('PLANNING'), priority: prioritySchema.default('MEDIUM'), startAt: z.coerce.date().nullable().optional(), dueAt: z.coerce.date().nullable().optional(), ownerId: id.nullable().optional(), memberIds: z.array(id).max(100).default([]) })
+export const updateProjectSchema = createProjectSchema.partial().extend({ id })
+export const taskQuerySchema = z.object({ projectId: id.optional(), search: z.string().trim().optional(), status: taskStatusSchema.optional(), includeArchived: z.boolean().default(false) })
+export const createTaskSchema = z.object({ projectId: id, title: z.string().trim().min(2).max(200), description: z.string().trim().max(5000).default(''), status: taskStatusSchema.default('TODO'), priority: prioritySchema.default('MEDIUM'), dueAt: z.coerce.date().nullable().optional(), estimatedMinutes: z.number().int().min(0).max(100000).nullable().optional(), assigneeId: id.nullable().optional(), labels: z.array(z.string().trim().min(1).max(40)).max(20).default([]), parentId: id.nullable().optional() })
+export const updateTaskSchema = createTaskSchema.partial().extend({ id })
+export const taskIdSchema = z.object({ id })
+export const duplicateTaskSchema = z.object({ id, projectId: id.optional() })
+export const dependencySchema = z.object({ taskId: id, dependsOnId: id })
+export const commentSchema = z.object({ taskId: id, body: z.string().trim().min(1).max(5000) })
+export const commentUpdateSchema = commentSchema.extend({ id })
+export const subtaskSchema = z.object({ parentId: id, projectId: id, title: z.string().trim().min(2).max(200), description: z.string().trim().max(5000).default(''), assigneeId: id.nullable().optional(), priority: prioritySchema.default('MEDIUM'), dueAt: z.coerce.date().nullable().optional(), labels: z.array(z.string().trim().min(1).max(40)).max(20).default([]) })
+export const activityQuerySchema = z.object({ taskId: id.optional(), projectId: id.optional(), limit: z.number().int().min(1).max(100).default(50) })
