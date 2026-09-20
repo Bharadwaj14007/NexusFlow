@@ -2,12 +2,13 @@ import WorkspaceApp from '@/components/workspace/workspace-app'
 import { requireOrganization } from '@/lib/auth/guards'
 import { initialsFromName, roleLabel } from '@/lib/utils/identity'
 import { listProjects, listTasks } from '@/lib/services/project-task.service'
+import { listDocuments } from '@/lib/services/ai.service'
 
 export const dynamic = 'force-dynamic'
 
 export default async function WorkspacePage() {
   const ctx = await requireOrganization()
-  const [projects, tasks] = await Promise.all([listProjects(), listTasks()])
+  const [projects, tasks, documents] = await Promise.all([listProjects(), listTasks(), listDocuments()])
 
   return (
     <WorkspaceApp
@@ -39,6 +40,12 @@ export default async function WorkspacePage() {
         subtasks: task.subtasks.map((subtask) => ({ id: subtask.id, title: subtask.title, status: subtask.status })),
         activities: task.activities.map((activity) => ({ id: activity.id, action: activity.action, createdAt: activity.createdAt.toISOString() })),
         dependencies: task.dependencies.map((dependency) => ({ dependsOnId: dependency.dependsOnId })),
+      }))}
+      initialDocuments={documents.map((document) => ({
+        id: document.id,
+        name: document.name,
+        status: document.status === 'READY' ? 'Ready' : document.status === 'FAILED' ? 'Failed' : 'Processing',
+        size: document.sizeBytes ? `${Math.ceil(document.sizeBytes / 1024)} KB` : 'Indexed',
       }))}
       user={{
         id: ctx.user.id,
