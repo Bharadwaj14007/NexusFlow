@@ -4,12 +4,13 @@ import { initialsFromName, roleLabel } from '@/lib/utils/identity'
 import { listProjects, listTasks } from '@/lib/services/project-task.service'
 import { listDocuments } from '@/lib/services/ai.service'
 import { listWorkflows } from '@/lib/services/workflow.service'
+import { listMembers, listNotifications } from '@/lib/services/platform.service'
 
 export const dynamic = 'force-dynamic'
 
 export default async function WorkspacePage() {
   const ctx = await requireOrganization()
-  const [projects, tasks, documents, workflows] = await Promise.all([listProjects(), listTasks(), listDocuments(), listWorkflows()])
+  const [projects, tasks, documents, workflows, members, notifications] = await Promise.all([listProjects(), listTasks(), listDocuments(), listWorkflows(), listMembers(), listNotifications()])
 
   return (
     <WorkspaceApp
@@ -59,6 +60,8 @@ export default async function WorkspacePage() {
         definition: workflow.definition as { trigger: string; conditions: { field: string; operator: string; value?: string }[]; actions: { type: string; title?: string; body?: string; projectId?: string; taskId?: string }[] },
         _count: workflow._count,
       }))}
+      initialMembers={members.map((member) => ({ id: member.id, role: member.role, user: { id: member.user.id, name: member.user.name, email: member.user.email, avatarInitials: member.user.avatarInitials } }))}
+      initialNotifications={notifications.map((notification) => ({ id: notification.id, title: notification.title, body: notification.body, readAt: notification.readAt?.toISOString() ?? null, createdAt: notification.createdAt.toISOString() }))}
       user={{
         id: ctx.user.id,
         name: ctx.user.name,

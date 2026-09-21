@@ -10,6 +10,7 @@ datasource db {
 enum MembershipRole {
   OWNER
   ADMIN
+  MANAGER
   MEMBER
   VIEWER
 }
@@ -110,6 +111,7 @@ model User {
   updatedAt      DateTime @updatedAt
 
   memberships        Membership[]
+  invitationsCreated OrganizationInvitation[] @relation("InvitationCreator")
   createdProjects    Project[]     @relation("ProjectCreator")
   ownedProjects      Project[]     @relation("ProjectOwner")
   projectMemberships ProjectMember[]
@@ -133,6 +135,7 @@ model Organization {
   updatedAt DateTime @updatedAt
 
   memberships        Membership[]
+  invitations        OrganizationInvitation[]
   projects           Project[]
   projectMembers     ProjectMember[]
   tasks              Task[]
@@ -168,6 +171,26 @@ model Membership {
   @@unique([userId, organizationId])
   @@index([organizationId])
   @@index([userId])
+}
+
+model OrganizationInvitation {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  email          String
+  role           MembershipRole @default(MEMBER)
+  tokenHash      String         @unique
+  invitedById    String         @db.Uuid
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitationCreator", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, email])
+  @@index([tokenHash])
 }
 
 model Session {
