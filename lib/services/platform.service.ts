@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db'
 import { requireAuth, requireOrganization, requireRole } from '@/lib/auth/guards'
 import { AppError } from '@/lib/errors'
 import { apiKeyCreateSchema, apiKeyIdSchema, documentIdSchema, inviteSchema, invitationTokenSchema, memberIdSchema, notificationIdSchema, searchSchema } from '@/lib/validation/platform'
-import { indexDocument } from '@/lib/services/ai.service'
+import { reindexDocumentRecord } from '@/lib/services/ai.service'
 
 const admins = [MembershipRole.OWNER, MembershipRole.ADMIN]
 const managers = [...admins, MembershipRole.MANAGER]
@@ -106,7 +106,9 @@ export async function reindexDocument(input: unknown) {
   const { id } = documentIdSchema.parse(input)
   const document = await prisma.document.findFirst({ where: { id, organizationId: ctx.organization.id } })
   if (!document?.content) throw new AppError('NOT_FOUND', 'Document content not found.', 404)
-  return indexDocument({ name: document.name, content: document.content })
+  const result = await reindexDocumentRecord({ documentId: document.id, content: document.content })
+  await audit(ctx.organization.id, ctx.user.id, 'document.reindexed', 'Document', id)
+  return result
 }
 
 export async function listApiKeys() {

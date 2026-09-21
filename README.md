@@ -1,2 +1,41 @@
 # NexusFlow
-AI-powered workflow automation platform for building, managing, and executing intelligent workflows with a modern full-stack architecture.
+
+NexusFlow is a multi-tenant workflow automation workspace built with Next.js, PostgreSQL, Prisma, and server actions. Organizations contain projects, tasks, documents, conversations, workflows, members, notifications, audit records, and API keys.
+
+## Local setup
+
+1. Install Node.js 20+ and PostgreSQL 15+ with the `vector` extension available if AI document retrieval is enabled.
+2. Install dependencies with `npm install`.
+3. Copy `.env.example` to `.env` and set `DATABASE_URL` and `AUTH_SECRET`.
+4. Apply the schema with `npx prisma migrate deploy` (or use `npx prisma migrate dev` during local development).
+5. Start the app with `npm run dev`.
+
+Authentication and organization context are resolved on the server. Mutations use the current session and membership rather than accepting a client-supplied organization ID.
+
+## Optional capabilities
+
+- `OPENAI_API_KEY` enables document embeddings, retrieval-augmented answers, and AI Workspace responses. It is only read on the server.
+- `WORKFLOW_CRON_SECRET` protects `GET /api/cron/workflows`. Configure the same value in Vercel Cron or another HTTP scheduler and send `Authorization: Bearer <secret>`.
+- `EMAIL_PROVIDER` is reserved for an email provider implementation. Without a configured provider, email workflow actions fail with a controlled configuration error.
+- `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` are placeholders for a future billing provider integration and are not required by the current application.
+
+## Main server capabilities
+
+- Projects and tasks: tenant-scoped CRUD, Kanban status changes, comments, subtasks, dependencies, activity, and authorization.
+- AI Workspace: persistent conversations, organization-scoped project/task context, document chunking, embeddings, source citations, and indexing states.
+- Workflows: validated definitions, event triggers, conditions, actions, durable execution records, retries, schedules, overdue processing, replay, and cancellation.
+- Organization platform: invitations, member roles, notifications, API keys stored as hashes, audit logs, and organization-wide search.
+
+Documents are indexed asynchronously from the request's perspective. A document is searchable only after all chunks and embeddings have been written successfully; failures leave it in `FAILED` state for retry.
+
+## Verification
+
+```bash
+npx tsc --noEmit
+npm run lint
+npm run build
+npx prisma validate
+git diff --check
+```
+
+Runtime database, OpenAI, email, and billing checks require the corresponding local or hosted services and credentials. Never commit `.env` or provider secrets.
