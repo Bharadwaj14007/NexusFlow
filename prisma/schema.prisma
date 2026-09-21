@@ -52,9 +52,18 @@ enum WorkflowStatus {
 enum WorkflowExecutionStatus {
   PENDING
   RUNNING
+  QUEUED
+  PROCESSING
   SUCCEEDED
+  COMPLETED
   FAILED
   CANCELLED
+}
+
+enum WorkflowScheduleFrequency {
+  NONE
+  DAILY
+  WEEKLY
 }
 
 enum NotificationType {
@@ -393,6 +402,10 @@ model Workflow {
   description    String         @default("")
   status         WorkflowStatus @default(DRAFT)
   definition     Json           @default("{}")
+  schedule       WorkflowScheduleFrequency @default(NONE)
+  scheduleTime   String?
+  scheduleDay    Int?
+  lastScheduledAt DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -410,6 +423,11 @@ model WorkflowExecution {
   trigger        String
   idempotencyKey String
   status         WorkflowExecutionStatus @default(PENDING)
+  retryCount     Int                     @default(0)
+  maxRetries     Int                     @default(3)
+  nextAttemptAt  DateTime?
+  queuedAt       DateTime?
+  processingAt   DateTime?
   startedAt      DateTime                @default(now())
   finishedAt     DateTime?
   error          String?

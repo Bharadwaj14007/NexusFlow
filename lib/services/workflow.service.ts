@@ -44,6 +44,9 @@ export async function createWorkflow(input: unknown) {
       description: data.description,
       definition: data.definition as Prisma.InputJsonValue,
       status: data.publish ? WorkflowStatus.ACTIVE : WorkflowStatus.DRAFT,
+      schedule: data.schedule?.frequency ?? 'NONE',
+      scheduleTime: data.schedule?.time,
+      scheduleDay: data.schedule?.day,
     },
   })
 }
@@ -61,6 +64,11 @@ export async function updateWorkflow(input: unknown) {
       ...(data.description !== undefined ? { description: data.description } : {}),
       ...(definition ? { definition: definition as Prisma.InputJsonValue } : {}),
       ...(data.publish !== undefined ? { status: data.publish ? WorkflowStatus.ACTIVE : WorkflowStatus.DRAFT } : {}),
+      ...(data.schedule ? {
+        schedule: data.schedule.frequency,
+        scheduleTime: data.schedule.time,
+        scheduleDay: data.schedule.day,
+      } : {}),
     },
   })
 }
@@ -78,7 +86,7 @@ export async function duplicateWorkflow(input: unknown) {
   const { id } = workflowIdSchema.parse(input)
   const source = await prisma.workflow.findFirst({ where: { id, organizationId: ctx.organization.id } })
   if (!source) throw new AppError('NOT_FOUND', 'Workflow not found.', 404)
-  return prisma.workflow.create({ data: { organizationId: ctx.organization.id, name: `${source.name} (copy)`, description: source.description, definition: source.definition as Prisma.InputJsonValue, status: WorkflowStatus.DRAFT } })
+  return prisma.workflow.create({ data: { organizationId: ctx.organization.id, name: `${source.name} (copy)`, description: source.description, definition: source.definition as Prisma.InputJsonValue, status: WorkflowStatus.DRAFT, schedule: 'NONE' } })
 }
 
 export async function deleteWorkflow(input: unknown) {

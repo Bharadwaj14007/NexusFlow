@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db'
 import { AppError } from '@/lib/errors'
 import { requireOrganization, requireRole } from '@/lib/auth/guards'
 import { createProjectSchema, updateProjectSchema, projectQuerySchema, createTaskSchema, updateTaskSchema, taskQuerySchema, taskIdSchema, duplicateTaskSchema, dependencySchema, commentSchema, commentUpdateSchema, subtaskSchema, activityQuerySchema } from '@/lib/validation/projects-tasks'
-import { runWorkflowEvent } from '@/lib/services/workflow-engine'
+import { enqueueWorkflowEvent } from '@/lib/services/workflow-engine'
 
 const canWrite = [MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.MEMBER]
 async function context(write = false) { return write ? requireRole(...canWrite) : requireOrganization() }
@@ -12,8 +12,8 @@ async function assertTask(id: string, organizationId: string) { const t = await 
 async function activity(tx: Prisma.TransactionClient, data: { organizationId: string; actorId: string; action: string; taskId?: string; projectId?: string; metadata?: Prisma.InputJsonValue }) { await tx.activityHistory.create({ data }) }
 
 async function assertMembers(ids: string[], organizationId: string) { const memberships = await prisma.membership.findMany({ where: { organizationId, userId: { in: ids } }, select: { userId: true } }); if (new Set(memberships.map((m) => m.userId)).size !== new Set(ids).size) throw new AppError('VALIDATION', 'All project members must belong to this organization.', 400) }
-async function emitWorkflowEvent(input: Parameters<typeof runWorkflowEvent>[0]) {
-  try { await runWorkflowEvent(input) } catch (error) { console.error('Workflow event processing failed after a successful mutation.', error) }
+async function emitWorkflowEvent(input: Parameters<typeof enqueueWorkflowEvent>[0]) {
+  try { await enqueueWorkflowEvent(input) } catch (error) { console.error('Workflow event enqueue failed after a successful mutation.', error) }
 }
 export async function listProjects(input: unknown = {}) { const ctx = await context(); const q = projectQuerySchema.parse(input); return prisma.project.findMany({ where: { organizationId: ctx.organization.id, ...(q.includeArchived ? {} : { archivedAt: null }), ...(q.search ? { OR: [{ name: { contains: q.search, mode: 'insensitive' } }, { description: { contains: q.search, mode: 'insensitive' } }] } : {}), ...(q.status ? { status: q.status } : {}) }, orderBy: { [q.sort]: 'desc' }, include: { owner: { select: { id: true, name: true, avatarInitials: true } }, members: { include: { user: { select: { id: true, name: true, avatarInitials: true } } } }, _count: { select: { tasks: true } } } }) }
 export async function createProject(input: unknown) { const ctx = await context(true); const data = createProjectSchema.parse(input); const memberIds = [...new Set([...(data.memberIds ?? []), data.ownerId ?? ctx.user.id])]; await assertMembers(memberIds, ctx.organization.id); const project = await prisma.$transaction(async tx => { const { memberIds: _memberIds, ...projectData } = data; const p = await tx.project.create({ data: { ...projectData, organizationId: ctx.organization.id, creatorId: ctx.user.id, ownerId: data.ownerId ?? ctx.user.id, members: { create: memberIds.map((userId) => ({ organizationId: ctx.organization.id, userId })) } } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, projectId: p.id, action: 'project.created' }); return p }); await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger: 'PROJECT_CREATED', entityId: project.id, actorId: ctx.user.id, eventId: `project.created:${project.id}:${project.createdAt.toISOString()}`, payload: { projectId: project.id, actorId: ctx.user.id, status: project.status, priority: project.priority } }); return project }

@@ -7,11 +7,17 @@ export const workflowTriggerSchema = z.enum([
   'TASK_OVERDUE',
   'PROJECT_CREATED',
   'COMMENT_ADDED',
+  'SCHEDULED',
 ])
 
 export const workflowFieldSchema = z.enum(['priority', 'status', 'projectId', 'assigneeId', 'dueAt', 'title', 'description'])
 export const workflowOperatorSchema = z.enum(['equals', 'not_equals', 'contains', 'is_set', 'is_not_set'])
-export const workflowActionTypeSchema = z.enum(['CREATE_TASK', 'UPDATE_TASK', 'ADD_COMMENT', 'CREATE_NOTIFICATION'])
+export const workflowActionTypeSchema = z.enum(['CREATE_TASK', 'UPDATE_TASK', 'ADD_COMMENT', 'CREATE_NOTIFICATION', 'SEND_EMAIL'])
+export const workflowScheduleSchema = z.object({
+  frequency: z.enum(['NONE', 'DAILY', 'WEEKLY']).default('NONE'),
+  time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  day: z.number().int().min(0).max(6).optional(),
+})
 
 export const workflowConditionSchema = z.object({
   field: workflowFieldSchema,
@@ -30,6 +36,8 @@ export const workflowActionSchema = z.object({
   status: z.enum(['TODO', 'IN_PROGRESS', 'REVIEW', 'DONE']).optional(),
   body: z.string().trim().max(5000).optional(),
   userId: z.string().uuid().optional(),
+  to: z.string().email().optional(),
+  subject: z.string().max(200).optional(),
 })
 
 export const workflowDefinitionSchema = z.object({
@@ -43,11 +51,11 @@ export const createWorkflowSchema = z.object({
   name: z.string().trim().min(2).max(120),
   description: z.string().trim().max(1000).default(''),
   definition: workflowDefinitionSchema,
+  schedule: workflowScheduleSchema.optional(),
   publish: z.boolean().default(false),
 })
 export const updateWorkflowSchema = createWorkflowSchema.partial().extend({ id: z.string().uuid() })
 export const workflowEventSchema = z.object({
-  organizationId: z.string().uuid(),
   trigger: workflowTriggerSchema,
   entityId: z.string().uuid(),
   actorId: z.string().uuid().optional(),
