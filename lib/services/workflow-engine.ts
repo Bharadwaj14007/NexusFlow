@@ -65,6 +65,17 @@ export async function enqueueWorkflowEvent(input: unknown) {
 }
 
 export async function processWorkflowJobs(limit = 25) {
+  await prisma.workflowExecution.updateMany({
+    where: {
+      status: WorkflowExecutionStatus.PROCESSING,
+      processingAt: { lt: new Date(Date.now() - 15 * 60_000) },
+    },
+    data: {
+      status: WorkflowExecutionStatus.QUEUED,
+      nextAttemptAt: new Date(),
+      error: 'Recovered after a stale worker lease.',
+    },
+  })
   const jobs = await prisma.workflowExecution.findMany({ where: { status: WorkflowExecutionStatus.QUEUED, OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: new Date() } }] }, orderBy: { queuedAt: 'asc' }, take: limit })
   const results = []
   for (const job of jobs) {

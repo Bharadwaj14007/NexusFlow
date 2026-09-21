@@ -14,5 +14,5 @@ export async function GET(request: Request) {
     processOverdueTasks(),
     processWorkflowJobs(),
   ])
-  return NextResponse.json({ ok: true, scheduled: scheduled.length, overdue: overdue.length, queued: queued.length })
+  return NextResponse.json({ ok: true, scheduled: scheduled.length, overdue: overdue.length, queued: queued.length, processedAt: new Date().toISOString() })
 }

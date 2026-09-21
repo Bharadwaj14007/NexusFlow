@@ -47,6 +47,11 @@ export const workflowDefinitionSchema = z.object({
 })
 
 export const workflowIdSchema = z.object({ id: z.string().uuid() })
+export const workflowExecutionQuerySchema = z.object({
+  workflowId: z.string().uuid().optional(),
+  status: z.enum(['PENDING', 'RUNNING', 'QUEUED', 'PROCESSING', 'SUCCEEDED', 'COMPLETED', 'FAILED', 'CANCELLED']).optional(),
+})
+export const workflowExecutionIdSchema = z.object({ id: z.string().uuid() })
 export const createWorkflowSchema = z.object({
   name: z.string().trim().min(2).max(120),
   description: z.string().trim().max(1000).default(''),

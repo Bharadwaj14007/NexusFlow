@@ -8,6 +8,8 @@ import {
   testWorkflowSchema,
   updateWorkflowSchema,
   workflowDefinitionSchema,
+  workflowExecutionIdSchema,
+  workflowExecutionQuerySchema,
   workflowIdSchema,
 } from '@/lib/validation/workflows'
 import { runWorkflowEvent, testWorkflowDefinition } from '@/lib/services/workflow-engine'
@@ -25,13 +27,53 @@ export async function listWorkflows() {
 
 export async function listWorkflowExecutions(input: unknown = {}) {
   const ctx = await requireOrganization()
-  const query = input && typeof input === 'object' ? input as { workflowId?: string } : {}
+  const query = workflowExecutionQuerySchema.parse(input)
   return prisma.workflowExecution.findMany({
     where: { organizationId: ctx.organization.id, ...(query.workflowId ? { workflowId: query.workflowId } : {}) },
     orderBy: { startedAt: 'desc' },
     take: 100,
     include: { workflow: { select: { name: true } } },
   })
+}
+
+export async function workflowExecutionSummary() {
+  const ctx = await requireOrganization()
+  const grouped = await prisma.workflowExecution.groupBy({
+    by: ['status'],
+    where: { organizationId: ctx.organization.id },
+    _count: { _all: true },
+  })
+  return Object.fromEntries(grouped.map((item) => [item.status, item._count._all]))
+}
+
+export async function replayWorkflowExecution(input: unknown) {
+  const ctx = await requireRole(...writers)
+  const { id } = workflowExecutionIdSchema.parse(input)
+  const execution = await prisma.workflowExecution.findFirst({ where: { id, organizationId: ctx.organization.id } })
+  if (!execution) throw new AppError('NOT_FOUND', 'Execution not found.', 404)
+  if (execution.status !== 'FAILED') throw new AppError('VALIDATION', 'Only failed executions can be replayed.', 400)
+  return prisma.workflowExecution.update({
+    where: { id: execution.id },
+    data: {
+      status: 'QUEUED',
+      retryCount: 0,
+      error: null,
+      finishedAt: null,
+      queuedAt: new Date(),
+      nextAttemptAt: new Date(),
+    },
+  })
+}
+
+export async function cancelWorkflowExecution(input: unknown) {
+  const ctx = await requireRole(...writers)
+  const { id } = workflowExecutionIdSchema.parse(input)
+  const result = await prisma.workflowExecution.updateMany({
+    where: { id, organizationId: ctx.organization.id, status: { in: ['QUEUED', 'PROCESSING'] } },
+    data: { status: 'CANCELLED', finishedAt: new Date(), error: 'Cancelled by an organization member.' },
+  })
+  if (!result.count) throw new AppError('NOT_FOUND', 'Queued or processing execution not found.', 404)
+  return { ok: true }
 }
 
 export async function createWorkflow(input: unknown) {
