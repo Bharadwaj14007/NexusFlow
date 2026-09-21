@@ -407,6 +407,8 @@ model WorkflowExecution {
   id             String                  @id @default(uuid()) @db.Uuid
   organizationId String                  @db.Uuid
   workflowId     String                  @db.Uuid
+  trigger        String
+  idempotencyKey String
   status         WorkflowExecutionStatus @default(PENDING)
   startedAt      DateTime                @default(now())
   finishedAt     DateTime?
@@ -421,6 +423,7 @@ model WorkflowExecution {
   @@index([organizationId])
   @@index([workflowId])
   @@index([organizationId, status])
+  @@unique([organizationId, idempotencyKey])
 }
 
 model Notification {

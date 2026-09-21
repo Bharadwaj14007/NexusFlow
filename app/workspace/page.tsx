@@ -3,12 +3,13 @@ import { requireOrganization } from '@/lib/auth/guards'
 import { initialsFromName, roleLabel } from '@/lib/utils/identity'
 import { listProjects, listTasks } from '@/lib/services/project-task.service'
 import { listDocuments } from '@/lib/services/ai.service'
+import { listWorkflows } from '@/lib/services/workflow.service'
 
 export const dynamic = 'force-dynamic'
 
 export default async function WorkspacePage() {
   const ctx = await requireOrganization()
-  const [projects, tasks, documents] = await Promise.all([listProjects(), listTasks(), listDocuments()])
+  const [projects, tasks, documents, workflows] = await Promise.all([listProjects(), listTasks(), listDocuments(), listWorkflows()])
 
   return (
     <WorkspaceApp
@@ -46,6 +47,14 @@ export default async function WorkspacePage() {
         name: document.name,
         status: document.status === 'READY' ? 'Ready' : document.status === 'FAILED' ? 'Failed' : 'Processing',
         size: document.sizeBytes ? `${Math.ceil(document.sizeBytes / 1024)} KB` : 'Indexed',
+      }))}
+      initialWorkflows={workflows.map((workflow) => ({
+        id: workflow.id,
+        name: workflow.name,
+        description: workflow.description,
+        status: workflow.status,
+        definition: workflow.definition as { trigger: string; conditions: { field: string; operator: string; value?: string }[]; actions: { type: string; title?: string; body?: string; projectId?: string; taskId?: string }[] },
+        _count: workflow._count,
       }))}
       user={{
         id: ctx.user.id,
