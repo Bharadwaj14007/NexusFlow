@@ -10,6 +10,7 @@ datasource db {
 enum MembershipRole {
   OWNER
   ADMIN
+  MANAGER
   MEMBER
   VIEWER
 }
@@ -52,9 +53,18 @@ enum WorkflowStatus {
 enum WorkflowExecutionStatus {
   PENDING
   RUNNING
+  QUEUED
+  PROCESSING
   SUCCEEDED
+  COMPLETED
   FAILED
   CANCELLED
+}
+
+enum WorkflowScheduleFrequency {
+  NONE
+  DAILY
+  WEEKLY
 }
 
 enum NotificationType {
@@ -101,6 +111,7 @@ model User {
   updatedAt      DateTime @updatedAt
 
   memberships        Membership[]
+  invitationsCreated OrganizationInvitation[] @relation("InvitationCreator")
   createdProjects    Project[]     @relation("ProjectCreator")
   ownedProjects      Project[]     @relation("ProjectOwner")
   projectMemberships ProjectMember[]
@@ -124,6 +135,7 @@ model Organization {
   updatedAt DateTime @updatedAt
 
   memberships        Membership[]
+  invitations        OrganizationInvitation[]
   projects           Project[]
   projectMembers     ProjectMember[]
   tasks              Task[]
@@ -159,6 +171,26 @@ model Membership {
   @@unique([userId, organizationId])
   @@index([organizationId])
   @@index([userId])
+}
+
+model OrganizationInvitation {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  email          String
+  role           MembershipRole @default(MEMBER)
+  tokenHash      String         @unique
+  invitedById    String         @db.Uuid
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invitedBy    User         @relation("InvitationCreator", fields: [invitedById], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, email])
+  @@index([tokenHash])
 }
 
 model Session {
@@ -393,6 +425,10 @@ model Workflow {
   description    String         @default("")
   status         WorkflowStatus @default(DRAFT)
   definition     Json           @default("{}")
+  schedule       WorkflowScheduleFrequency @default(NONE)
+  scheduleTime   String?
+  scheduleDay    Int?
+  lastScheduledAt DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -407,7 +443,14 @@ model WorkflowExecution {
   id             String                  @id @default(uuid()) @db.Uuid
   organizationId String                  @db.Uuid
   workflowId     String                  @db.Uuid
+  trigger        String
+  idempotencyKey String
   status         WorkflowExecutionStatus @default(PENDING)
+  retryCount     Int                     @default(0)
+  maxRetries     Int                     @default(3)
+  nextAttemptAt  DateTime?
+  queuedAt       DateTime?
+  processingAt   DateTime?
   startedAt      DateTime                @default(now())
   finishedAt     DateTime?
   error          String?
@@ -421,6 +464,7 @@ model WorkflowExecution {
   @@index([organizationId])
   @@index([workflowId])
   @@index([organizationId, status])
+  @@unique([organizationId, idempotencyKey])
 }
 
 model Notification {
@@ -521,4 +565,13 @@ model Usage {
 
   @@unique([organizationId, periodStart])
   @@index([organizationId])
+}
+
+model RazorpayWebhookEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  eventId    String   @unique
+  eventType  String
+  receivedAt DateTime @default(now())
+
+  @@index([receivedAt])
 }

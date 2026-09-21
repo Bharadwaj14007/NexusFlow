@@ -273,12 +273,15 @@ async function main() {
       description: 'Notify assignees when a task becomes overdue.',
       status: WorkflowStatus.ACTIVE,
       definition: {
-        trigger: 'task.overdue',
-        actions: [{ type: 'notify_assignee' }],
+        trigger: 'TASK_OVERDUE',
+        conditions: [],
+        actions: [{ type: 'CREATE_NOTIFICATION', title: 'Overdue task', body: 'A task is overdue.' }],
       },
       executions: {
         create: {
           organizationId: organization.id,
+          trigger: 'TASK_OVERDUE',
+          idempotencyKey: `seed:${IDS.workflow}:${IDS.task1}`,
           status: WorkflowExecutionStatus.SUCCEEDED,
           startedAt: yesterday,
           finishedAt: yesterday,

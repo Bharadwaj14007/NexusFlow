@@ -3,12 +3,14 @@ import { requireOrganization } from '@/lib/auth/guards'
 import { initialsFromName, roleLabel } from '@/lib/utils/identity'
 import { listProjects, listTasks } from '@/lib/services/project-task.service'
 import { listDocuments } from '@/lib/services/ai.service'
+import { listWorkflows } from '@/lib/services/workflow.service'
+import { listMembers, listNotifications } from '@/lib/services/platform.service'
 
 export const dynamic = 'force-dynamic'
 
 export default async function WorkspacePage() {
   const ctx = await requireOrganization()
-  const [projects, tasks, documents] = await Promise.all([listProjects(), listTasks(), listDocuments()])
+  const [projects, tasks, documents, workflows, members, notifications] = await Promise.all([listProjects(), listTasks(), listDocuments(), listWorkflows(), listMembers(), listNotifications()])
 
   return (
     <WorkspaceApp
@@ -47,6 +49,19 @@ export default async function WorkspacePage() {
         status: document.status === 'READY' ? 'Ready' : document.status === 'FAILED' ? 'Failed' : 'Processing',
         size: document.sizeBytes ? `${Math.ceil(document.sizeBytes / 1024)} KB` : 'Indexed',
       }))}
+      initialWorkflows={workflows.map((workflow) => ({
+        id: workflow.id,
+        name: workflow.name,
+        description: workflow.description,
+        status: workflow.status,
+        schedule: workflow.schedule,
+        scheduleTime: workflow.scheduleTime,
+        scheduleDay: workflow.scheduleDay,
+        definition: workflow.definition as { trigger: string; conditions: { field: string; operator: string; value?: string }[]; actions: { type: string; title?: string; body?: string; projectId?: string; taskId?: string }[] },
+        _count: workflow._count,
+      }))}
+      initialMembers={members.map((member) => ({ id: member.id, role: member.role, user: { id: member.user.id, name: member.user.name, email: member.user.email, avatarInitials: member.user.avatarInitials } }))}
+      initialNotifications={notifications.map((notification) => ({ id: notification.id, title: notification.title, body: notification.body, readAt: notification.readAt?.toISOString() ?? null, createdAt: notification.createdAt.toISOString() }))}
       user={{
         id: ctx.user.id,
         name: ctx.user.name,

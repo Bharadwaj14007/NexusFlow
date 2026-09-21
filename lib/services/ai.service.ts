@@ -64,22 +64,38 @@ export async function indexDocument(input: unknown) {
   const document = await prisma.document.create({
     data: { organizationId: ctx.organization.id, uploaderId: ctx.user.id, name: data.name, content: data.content, mimeType: data.mimeType, status: 'PROCESSING' },
   })
+  return indexDocumentRecord(ctx.organization.id, document.id, data.content)
+}
+
+export async function reindexDocumentRecord(input: { documentId: string; content: string }) {
+  const ctx = await requireOrganization()
+  const document = await prisma.document.findFirst({
+    where: { id: input.documentId, organizationId: ctx.organization.id },
+    select: { id: true },
+  })
+  if (!document) throw new AppError('NOT_FOUND', 'Document not found.', 404)
+  return indexDocumentRecord(ctx.organization.id, document.id, input.content)
+}
+
+async function indexDocumentRecord(organizationId: string, documentId: string, content: string) {
   try {
-    const chunks = data.content.match(/[\s\S]{1,1800}(?:\s|$)/g) ?? [data.content]
+    await prisma.document.update({ where: { id: documentId }, data: { content, status: 'PROCESSING' } })
+    const chunks = content.match(/[\s\S]{1,1800}(?:\s|$)/g) ?? [content]
     const embeddingResponse = await openai('embeddings', { model: 'text-embedding-3-small', input: chunks })
     await prisma.$transaction(async (tx) => {
+      await tx.documentChunk.deleteMany({ where: { documentId, organizationId } })
       for (let index = 0; index < chunks.length; index += 1) {
         const embedding = embeddingResponse.data?.[index]?.embedding
-        await tx.documentChunk.create({ data: { documentId: document.id, organizationId: ctx.organization.id, chunkIndex: index, content: chunks[index], embeddingModel: embedding ? 'text-embedding-3-small' : null, dimensions: embedding?.length ?? null, metadata: { indexedAt: new Date().toISOString() } } })
-        if (embedding) await tx.$executeRaw`UPDATE "DocumentChunk" SET "embedding" = ${`[${embedding.join(',')}]`}::vector WHERE "documentId" = ${document.id}::uuid AND "chunkIndex" = ${index}`
+        await tx.documentChunk.create({ data: { documentId, organizationId, chunkIndex: index, content: chunks[index], embeddingModel: embedding ? 'text-embedding-3-small' : null, dimensions: embedding?.length ?? null, metadata: { indexedAt: new Date().toISOString() } } })
+        if (embedding) await tx.$executeRaw`UPDATE "DocumentChunk" SET "embedding" = ${`[${embedding.join(',')}]`}::vector WHERE "documentId" = ${documentId}::uuid AND "chunkIndex" = ${index}`
       }
-      await tx.document.update({ where: { id: document.id }, data: { status: 'READY' } })
+      await tx.document.update({ where: { id: documentId }, data: { status: 'READY' } })
     })
   } catch (error) {
-    await prisma.document.update({ where: { id: document.id }, data: { status: 'FAILED' } }).catch(() => undefined)
+    await prisma.document.update({ where: { id: documentId }, data: { status: 'FAILED' } }).catch(() => undefined)
     throw error
   }
-  return prisma.document.findUniqueOrThrow({ where: { id: document.id }, select: { id: true, name: true, status: true, createdAt: true } })
+  return prisma.document.findUniqueOrThrow({ where: { id: documentId }, select: { id: true, name: true, status: true, createdAt: true } })
 }
 
 export async function sendMessage(input: unknown) {
