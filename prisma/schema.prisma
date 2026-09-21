@@ -566,3 +566,12 @@ model Usage {
   @@unique([organizationId, periodStart])
   @@index([organizationId])
 }
+
+model RazorpayWebhookEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  eventId    String   @unique
+  eventType  String
+  receivedAt DateTime @default(now())
+
+  @@index([receivedAt])
+}

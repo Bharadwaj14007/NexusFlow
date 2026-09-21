@@ -5,6 +5,7 @@ import { requireAuth, requireOrganization, requireRole } from '@/lib/auth/guards
 import { AppError } from '@/lib/errors'
 import { apiKeyCreateSchema, apiKeyIdSchema, documentIdSchema, inviteSchema, invitationTokenSchema, memberIdSchema, notificationIdSchema, searchSchema } from '@/lib/validation/platform'
 import { reindexDocumentRecord } from '@/lib/services/ai.service'
+import { getWorkflowEmailProvider } from '@/lib/services/email.provider'
 
 const admins = [MembershipRole.OWNER, MembershipRole.ADMIN]
 const managers = [...admins, MembershipRole.MANAGER]
@@ -27,6 +28,15 @@ export async function inviteMember(input: unknown) {
   const token = randomBytes(32).toString('hex')
   const invitation = await prisma.organizationInvitation.create({ data: { organizationId: ctx.organization.id, email: data.email.toLowerCase(), role: data.role, tokenHash: hash(token), invitedById: ctx.user.id, expiresAt: new Date(Date.now() + 7 * 86400000) } })
   if (user) await prisma.notification.create({ data: { organizationId: ctx.organization.id, userId: user.id, type: NotificationType.SYSTEM, title: 'Organization invitation', body: `You were invited to join ${ctx.organization.name}.` } })
+  const provider = getWorkflowEmailProvider()
+  if (provider) {
+    const origin = process.env.APP_URL ?? 'http://localhost:3000'
+    await provider.send({
+      to: data.email.toLowerCase(),
+      subject: `Invitation to join ${ctx.organization.name}`,
+      body: `You have been invited to join ${ctx.organization.name}. Sign in, then use this invitation token to accept: ${token}\n\n${origin}/workspace`,
+    })
+  }
   await audit(ctx.organization.id, ctx.user.id, 'invitation.created', 'OrganizationInvitation', invitation.id, { email: data.email, role: data.role })
   return { id: invitation.id, token }
 }

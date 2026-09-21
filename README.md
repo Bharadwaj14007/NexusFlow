@@ -16,8 +16,10 @@ Authentication and organization context are resolved on the server. Mutations us
 
 - `OPENAI_API_KEY` enables document embeddings, retrieval-augmented answers, and AI Workspace responses. It is only read on the server.
 - `WORKFLOW_CRON_SECRET` protects `GET /api/cron/workflows`. Configure the same value in Vercel Cron or another HTTP scheduler and send `Authorization: Bearer <secret>`.
-- `EMAIL_PROVIDER` is reserved for an email provider implementation. Without a configured provider, email workflow actions fail with a controlled configuration error.
-- `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` are placeholders for a future billing provider integration and are not required by the current application.
+- `RESEND_API_KEY` and `RESEND_FROM_EMAIL` enable invitation and workflow email delivery. Without both values, email actions fail with a controlled configuration error.
+- `RAZORPAY_WEBHOOK_SECRET` enables signature verification for `POST /api/webhooks/razorpay`. Verified event IDs are persisted and duplicate deliveries are ignored. Subscription state is not changed until provider/order mapping is added to the billing model.
+- `CLOUDINARY_*` is intentionally optional: the current Documents feature stores text for RAG and does not require binary file storage.
+- `SENTRY_DSN` is reserved for optional error monitoring setup; it is not required to run the application.
 
 ## Main server capabilities
 
@@ -39,3 +41,7 @@ git diff --check
 ```
 
 Runtime database, OpenAI, email, and billing checks require the corresponding local or hosted services and credentials. Never commit `.env` or provider secrets.
+
+## Production deployment
+
+Configure the variables in `.env.example` as Vercel project environment variables, then deploy migrations with `npx prisma migrate deploy` during the release step. Configure Razorpay to POST to `/api/webhooks/razorpay` with the same webhook secret, and configure the workflow scheduler to call `/api/cron/workflows` with its bearer secret. The credentials supplied through chat or local files must be revoked and rotated before use; this repository does not contain or consume those values.
