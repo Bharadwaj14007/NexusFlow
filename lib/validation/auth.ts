@@ -7,7 +7,9 @@ export const signInSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters.'),
 })
 
-export const signUpSchema = signInSchema
+export const signUpSchema = signInSchema.extend({
+  name: z.string().trim().min(2, 'Enter your name.').max(100, 'Name is too long.'),
+})
 
 export const onboardingSchema = z.object({
   name: z.string().trim().min(2, 'Enter your name.'),

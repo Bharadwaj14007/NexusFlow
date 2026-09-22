@@ -1,6 +1,7 @@
 'use server'
 
 import { redirect } from 'next/navigation'
+import { isRedirectError } from 'next/dist/client/components/redirect-error'
 import { MembershipRole } from '@prisma/client'
 import { ZodError } from 'zod'
 import { requireRole } from '@/lib/auth/guards'
@@ -10,11 +11,13 @@ import { createOrganization, switchOrganization, updateCurrentOrganization } fro
 import { onboardingSchema } from '@/lib/validation/auth'
 
 function actionError(error: unknown): { error: string } {
+  if (isRedirectError(error)) throw error
   if (error instanceof ZodError) {
     return { error: error.issues[0]?.message ?? 'Invalid input.' }
   }
   if (isAppError(error)) return { error: error.message }
-  throw error
+  console.error('Authentication action failed.', error instanceof Error ? error.message : 'Unknown error')
+  return { error: 'Unable to complete that request. Please try again.' }
 }
 
 export async function signInAction(input: { email: string; password: string }) {
@@ -27,7 +30,7 @@ export async function signInAction(input: { email: string; password: string }) {
   }
 }
 
-export async function signUpAction(input: { email: string; password: string }) {
+export async function signUpAction(input: { name: string; email: string; password: string }) {
   try {
     await signUp(input)
     redirect('/auth?setup=1')

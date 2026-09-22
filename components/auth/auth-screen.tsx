@@ -40,7 +40,7 @@ export default function AuthScreen({
 
     setLoading(true)
     const result = mode === 'signup'
-      ? await signUpAction({ email, password })
+      ? await signUpAction({ name, email, password })
       : await signInAction({ email, password })
     setLoading(false)
     if (result?.error) setError(result.error)
@@ -119,6 +119,7 @@ export default function AuthScreen({
             <p className="mt-2 text-sm text-muted-foreground">{subtitle}</p>
           </div>
           <form className="flex flex-col gap-4" onSubmit={submit}>
+            {mode === 'signup' && <label className="flex flex-col gap-1.5 text-sm font-medium">Your name<input value={name} onChange={e=>setName(e.target.value)} className="rounded-md border border-border bg-background px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>}
             <label className="flex flex-col gap-1.5 text-sm font-medium">Work email<input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="rounded-md border border-border bg-background px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>
             {mode !== 'forgot' && (
               <label className="flex flex-col gap-1.5 text-sm font-medium">Password

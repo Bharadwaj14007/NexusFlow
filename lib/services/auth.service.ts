@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { AppError } from '@/lib/errors'
 import { getAuthContext } from '@/lib/auth/context'
@@ -15,15 +16,22 @@ export async function signUp(input: unknown) {
     throw new AppError('CONFLICT', 'An account with this email already exists.')
   }
 
-  const localName = data.email.split('@')[0] ?? 'Member'
-  const user = await prisma.user.create({
-    data: {
-      email: data.email,
-      name: localName,
-      passwordHash: hashPassword(data.password),
-      avatarInitials: initialsFromName(localName),
-    },
-  })
+  let user
+  try {
+    user = await prisma.user.create({
+      data: {
+        email: data.email,
+        name: data.name,
+        passwordHash: hashPassword(data.password),
+        avatarInitials: initialsFromName(data.name),
+      },
+    })
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new AppError('CONFLICT', 'An account with this email already exists.')
+    }
+    throw error
+  }
 
   await createUserSession(user.id, null)
   return { userId: user.id, needsOrganization: true }
