@@ -1,12 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { MembershipRole, NotificationType } from '@prisma/client'
 import { prisma } from '@/lib/db'
-import { requireAuth, requireOrganization, requireRole } from '@/lib/auth/guards'
+import { requireAuth, requireOrganization, requirePermission, requireRole } from '@/lib/auth/guards'
 import { AppError } from '@/lib/errors'
-import { apiKeyCreateSchema, apiKeyIdSchema, documentIdSchema, inviteSchema, invitationTokenSchema, memberIdSchema, notificationIdSchema, searchSchema } from '@/lib/validation/platform'
+import { apiKeyCreateSchema, apiKeyIdSchema, auditLogQuerySchema, documentIdSchema, inviteSchema, invitationTokenSchema, memberIdSchema, notificationIdSchema, searchSchema } from '@/lib/validation/platform'
 import { reindexDocumentRecord } from '@/lib/services/ai.service'
 import { getWorkflowEmailProvider } from '@/lib/services/email.provider'
 import { canInviteRole, canManageMemberRole } from '@/lib/auth/permissions'
+import { assertPlanCapacity } from '@/lib/services/plan-limits'
+import { deleteOriginalDocument } from '@/lib/services/document-storage'
 
 const admins = [MembershipRole.OWNER, MembershipRole.ADMIN]
 const managers = [...admins, MembershipRole.MANAGER]
@@ -33,6 +35,7 @@ export async function listPendingInvitations() {
 export async function inviteMember(input: unknown) {
   const ctx = await requireRole(...managers)
   const data = inviteSchema.parse(input)
+  await assertPlanCapacity(ctx.organization.id, 'seats')
   if (!canInviteRole(ctx.membership.role, data.role)) throw new AppError('FORBIDDEN', 'You cannot invite a member with that role.', 403)
   const user = await prisma.user.findUnique({ where: { email: data.email.toLowerCase() } })
   if (user && await prisma.membership.findUnique({ where: { userId_organizationId: { userId: user.id, organizationId: ctx.organization.id } } })) throw new AppError('VALIDATION', 'That user is already a member.', 400)
@@ -95,6 +98,23 @@ export async function acceptInvitation(input: unknown) {
     if (membership) throw new AppError('CONFLICT', 'You are already a member of this organization.', 409)
     await tx.membership.create({ data: { userId: ctx.user.id, organizationId: invitation.organizationId, role: invitation.role } })
     await tx.session.update({ where: { id: ctx.sessionId }, data: { currentOrganizationId: invitation.organizationId } })
+    if (invitation.invitedById !== ctx.user.id) {
+      const inviterMembership = await tx.membership.findUnique({
+        where: { userId_organizationId: { userId: invitation.invitedById, organizationId: invitation.organizationId } },
+        select: { id: true },
+      })
+      if (inviterMembership) {
+        await tx.notification.create({
+          data: {
+            organizationId: invitation.organizationId,
+            userId: invitation.invitedById,
+            type: NotificationType.SYSTEM,
+            title: 'Invitation accepted',
+            body: `${ctx.user.name} joined the organization.`,
+          },
+        })
+      }
+    }
   })
   await audit(invitation.organizationId, ctx.user.id, 'invitation.accepted', 'OrganizationInvitation', invitation.id)
   return { ok: true }
@@ -145,15 +165,17 @@ export async function markAllNotificationsRead() {
 }
 
 export async function deleteDocument(input: unknown) {
-  const ctx = await requireRole(...managers)
+  const ctx = await requirePermission('documents:delete')
   const { id } = documentIdSchema.parse(input)
-  const result = await prisma.document.deleteMany({ where: { id, organizationId: ctx.organization.id } })
-  if (!result.count) throw new AppError('NOT_FOUND', 'Document not found.', 404)
+  const document = await prisma.document.findFirst({ where: { id, organizationId: ctx.organization.id }, select: { storageKey: true } })
+  if (!document) throw new AppError('NOT_FOUND', 'Document not found.', 404)
+  if (document.storageKey) await deleteOriginalDocument(document.storageKey)
+  await prisma.document.delete({ where: { id } })
   await audit(ctx.organization.id, ctx.user.id, 'document.deleted', 'Document', id)
   return { ok: true }
 }
 export async function reindexDocument(input: unknown) {
-  const ctx = await requireRole(...managers)
+  const ctx = await requirePermission('documents:create')
   const { id } = documentIdSchema.parse(input)
   const document = await prisma.document.findFirst({ where: { id, organizationId: ctx.organization.id } })
   if (!document?.content) throw new AppError('NOT_FOUND', 'Document content not found.', 404)
@@ -163,12 +185,13 @@ export async function reindexDocument(input: unknown) {
 }
 
 export async function listApiKeys() {
-  const ctx = await requireRole(...managers)
+  const ctx = await requirePermission('api_keys:read')
   return prisma.apiKey.findMany({ where: { organizationId: ctx.organization.id }, select: { id: true, name: true, keyPrefix: true, expiresAt: true, lastUsedAt: true, createdAt: true }, orderBy: { createdAt: 'desc' } })
 }
 export async function createApiKey(input: unknown) {
   const ctx = await requireRole(...admins)
   const data = apiKeyCreateSchema.parse(input)
+  await assertPlanCapacity(ctx.organization.id, 'apiKeys')
   const secret = `nxf_${randomBytes(24).toString('hex')}`
   const key = await prisma.apiKey.create({ data: { organizationId: ctx.organization.id, name: data.name, keyPrefix: secret.slice(0, 12), keyHash: hash(secret), expiresAt: data.expiresAt } })
   await audit(ctx.organization.id, ctx.user.id, 'api_key.created', 'ApiKey', key.id, { name: data.name })
@@ -198,9 +221,21 @@ export async function searchOrganization(input: unknown) {
   return { projects, tasks, documents, members, workflows, conversations }
 }
 
-export async function listAuditLogs() {
-  const ctx = await requireRole(...managers)
-  return prisma.auditLog.findMany({ where: { organizationId: ctx.organization.id }, orderBy: { createdAt: 'desc' }, take: 100, include: { actor: { select: { name: true, email: true } } } })
+export async function listAuditLogs(input: unknown = {}) {
+  const ctx = await requirePermission('audit_logs:read')
+  const query = auditLogQuerySchema.parse(input)
+  return prisma.auditLog.findMany({
+    where: {
+      organizationId: ctx.organization.id,
+      ...(query.search ? { OR: [
+        { action: { contains: query.search, mode: 'insensitive' } },
+        { entityType: { contains: query.search, mode: 'insensitive' } },
+      ] } : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+    include: { actor: { select: { name: true, email: true } } },
+  })
 }
 
 export async function getWorkspaceMetrics() {

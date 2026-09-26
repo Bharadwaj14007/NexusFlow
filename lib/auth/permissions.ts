@@ -7,7 +7,7 @@ export type Permission =
   | 'workflows:read' | 'workflows:create' | 'workflows:update' | 'workflows:delete' | 'workflows:execute'
   | 'members:read' | 'members:invite' | 'members:update' | 'members:remove'
   | 'billing:read' | 'billing:manage' | 'integrations:manage'
-  | 'api_keys:create' | 'api_keys:revoke' | 'audit_logs:read'
+  | 'api_keys:read' | 'api_keys:create' | 'api_keys:revoke' | 'audit_logs:read'
 
 const readPermissions: Permission[] = [
   'projects:read', 'tasks:read', 'documents:read', 'workflows:read', 'members:read', 'billing:read',
@@ -20,7 +20,7 @@ const allPermissions = new Set<Permission>([
   'documents:create', 'documents:delete',
   'workflows:create', 'workflows:update', 'workflows:delete', 'workflows:execute',
   'members:invite', 'members:update', 'members:remove',
-  'billing:manage', 'integrations:manage', 'api_keys:create', 'api_keys:revoke', 'audit_logs:read',
+  'billing:manage', 'integrations:manage', 'api_keys:read', 'api_keys:create', 'api_keys:revoke', 'audit_logs:read',
 ])
 
 const rolePermissions: Record<MembershipRole, ReadonlySet<Permission>> = {

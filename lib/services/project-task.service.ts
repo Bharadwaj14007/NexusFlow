@@ -1,12 +1,13 @@
 import { MembershipRole, NotificationType, Prisma, ProjectStatus } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { AppError } from '@/lib/errors'
-import { requireOrganization, requireRole } from '@/lib/auth/guards'
+import { requireOrganization, requirePermission } from '@/lib/auth/guards'
+import type { Permission } from '@/lib/auth/permissions'
 import { createProjectSchema, updateProjectSchema, projectQuerySchema, createTaskSchema, updateTaskSchema, taskQuerySchema, taskIdSchema, duplicateTaskSchema, dependencySchema, commentSchema, commentUpdateSchema, subtaskSchema, activityQuerySchema } from '@/lib/validation/projects-tasks'
 import { enqueueWorkflowEvent } from '@/lib/services/workflow-engine'
+import { assertPlanCapacity } from '@/lib/services/plan-limits'
 
-const canWrite = [MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.MANAGER, MembershipRole.MEMBER]
-async function context(write = false) { return write ? requireRole(...canWrite) : requireOrganization() }
+async function context(permission?: Permission) { return permission ? requirePermission(permission) : requireOrganization() }
 async function assertProject(id: string, organizationId: string) { const p = await prisma.project.findFirst({ where: { id, organizationId } }); if (!p) throw new AppError('NOT_FOUND', 'Project not found.', 404); return p }
 async function assertTask(id: string, organizationId: string) { const t = await prisma.task.findFirst({ where: { id, organizationId } }); if (!t) throw new AppError('NOT_FOUND', 'Task not found.', 404); return t }
 async function activity(tx: Prisma.TransactionClient, data: { organizationId: string; actorId: string; action: string; taskId?: string; projectId?: string; metadata?: Prisma.InputJsonValue }) { await tx.activityHistory.create({ data }) }
@@ -16,23 +17,162 @@ async function emitWorkflowEvent(input: Parameters<typeof enqueueWorkflowEvent>[
   try { await enqueueWorkflowEvent(input) } catch (error) { console.error('Workflow event enqueue failed after a successful mutation.', error) }
 }
 export async function listProjects(input: unknown = {}) { const ctx = await context(); const q = projectQuerySchema.parse(input); return prisma.project.findMany({ where: { organizationId: ctx.organization.id, ...(q.includeArchived ? {} : { archivedAt: null }), ...(q.search ? { OR: [{ name: { contains: q.search, mode: 'insensitive' } }, { description: { contains: q.search, mode: 'insensitive' } }] } : {}), ...(q.status ? { status: q.status } : {}) }, orderBy: { [q.sort]: 'desc' }, include: { owner: { select: { id: true, name: true, avatarInitials: true } }, members: { include: { user: { select: { id: true, name: true, avatarInitials: true } } } }, _count: { select: { tasks: true } } } }) }
-export async function createProject(input: unknown) { const ctx = await context(true); const data = createProjectSchema.parse(input); const memberIds = [...new Set([...(data.memberIds ?? []), data.ownerId ?? ctx.user.id])]; await assertMembers(memberIds, ctx.organization.id); const project = await prisma.$transaction(async tx => { const { memberIds: _memberIds, ...projectData } = data; const p = await tx.project.create({ data: { ...projectData, organizationId: ctx.organization.id, creatorId: ctx.user.id, ownerId: data.ownerId ?? ctx.user.id, members: { create: memberIds.map((userId) => ({ organizationId: ctx.organization.id, userId })) } } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, projectId: p.id, action: 'project.created' }); if (p.ownerId && p.ownerId !== ctx.user.id) await tx.notification.create({ data: { organizationId: ctx.organization.id, userId: p.ownerId, type: NotificationType.PROJECT, title: 'Project ownership assigned', body: `You are the owner of ${p.name}.` } }); return p }); await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger: 'PROJECT_CREATED', entityId: project.id, actorId: ctx.user.id, eventId: `project.created:${project.id}:${project.createdAt.toISOString()}`, payload: { projectId: project.id, actorId: ctx.user.id, status: project.status, priority: project.priority } }); return project }
-export async function updateProject(input: unknown) { const ctx = await context(true); const data = updateProjectSchema.parse(input); await assertProject(data.id, ctx.organization.id); const memberIds = data.memberIds ? [...new Set(data.memberIds)] : undefined; if (memberIds) await assertMembers(memberIds, ctx.organization.id); if (data.ownerId) await assertMembers([data.ownerId], ctx.organization.id); const { id, memberIds: _memberIds, ...changes } = data; return prisma.$transaction(async tx => { if (memberIds) { await tx.projectMember.deleteMany({ where: { projectId: id } }); await tx.projectMember.createMany({ data: memberIds.map((userId) => ({ projectId: id, organizationId: ctx.organization.id, userId })) }) } const p = await tx.project.update({ where: { id }, data: changes }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, projectId: id, action: 'project.updated', metadata: changes as Prisma.InputJsonValue }); return p }) }
-export async function archiveProject(input: unknown) { const ctx = await context(true); const { id } = taskIdSchema.parse(input); await assertProject(id, ctx.organization.id); return prisma.$transaction(async tx => { const project = await tx.project.update({ where: { id }, data: { archivedAt: new Date(), status: ProjectStatus.ARCHIVED } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, projectId: id, action: 'project.archived' }); return project }) }
-export async function deleteProject(input: unknown) { const ctx = await context(true); const { id } = taskIdSchema.parse(input); await assertProject(id, ctx.organization.id); return prisma.project.delete({ where: { id } }) }
+export async function createProject(input: unknown) { const ctx = await context('projects:create'); const data = createProjectSchema.parse(input); await assertPlanCapacity(ctx.organization.id, 'projects'); const memberIds = [...new Set([...(data.memberIds ?? []), data.ownerId ?? ctx.user.id])]; await assertMembers(memberIds, ctx.organization.id); const project = await prisma.$transaction(async tx => { const { memberIds: _memberIds, ...projectData } = data; const p = await tx.project.create({ data: { ...projectData, organizationId: ctx.organization.id, creatorId: ctx.user.id, ownerId: data.ownerId ?? ctx.user.id, members: { create: memberIds.map((userId) => ({ organizationId: ctx.organization.id, userId })) } } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, projectId: p.id, action: 'project.created' }); if (p.ownerId && p.ownerId !== ctx.user.id) await tx.notification.create({ data: { organizationId: ctx.organization.id, userId: p.ownerId, type: NotificationType.PROJECT, title: 'Project ownership assigned', body: `You are the owner of ${p.name}.` } }); return p }); await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger: 'PROJECT_CREATED', entityId: project.id, actorId: ctx.user.id, eventId: `project.created:${project.id}:${project.createdAt.toISOString()}`, payload: { projectId: project.id, actorId: ctx.user.id, status: project.status, priority: project.priority } }); return project }
+export async function updateProject(input: unknown) { const ctx = await context('projects:update'); const data = updateProjectSchema.parse(input); await assertProject(data.id, ctx.organization.id); const memberIds = data.memberIds ? [...new Set(data.memberIds)] : undefined; if (memberIds) await assertMembers(memberIds, ctx.organization.id); if (data.ownerId) await assertMembers([data.ownerId], ctx.organization.id); const { id, memberIds: _memberIds, ...changes } = data; return prisma.$transaction(async tx => { if (memberIds) { await tx.projectMember.deleteMany({ where: { projectId: id } }); await tx.projectMember.createMany({ data: memberIds.map((userId) => ({ projectId: id, organizationId: ctx.organization.id, userId })) }) } const p = await tx.project.update({ where: { id }, data: changes }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, projectId: id, action: 'project.updated', metadata: changes as Prisma.InputJsonValue }); return p }) }
+export async function archiveProject(input: unknown) { const ctx = await context('projects:delete'); const { id } = taskIdSchema.parse(input); await assertProject(id, ctx.organization.id); return prisma.$transaction(async tx => { const project = await tx.project.update({ where: { id }, data: { archivedAt: new Date(), status: ProjectStatus.ARCHIVED } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, projectId: id, action: 'project.archived' }); return project }) }
+export async function deleteProject(input: unknown) {
+  const ctx = await context('projects:delete')
+  const { id } = taskIdSchema.parse(input)
+  await assertProject(id, ctx.organization.id)
+  return prisma.$transaction(async (tx) => {
+    await tx.auditLog.create({
+      data: { organizationId: ctx.organization.id, actorId: ctx.user.id, action: 'project.deleted', entityType: 'Project', entityId: id },
+    })
+    return tx.project.delete({ where: { id } })
+  })
+}
 
 export async function listTasks(input: unknown = {}) { const ctx = await context(); const q = taskQuerySchema.parse(input); return prisma.task.findMany({ where: { organizationId: ctx.organization.id, ...(q.includeArchived ? {} : { archivedAt: null }), ...(q.projectId ? { projectId: q.projectId } : {}), ...(q.status ? { status: q.status } : {}), ...(q.search ? { OR: [{ title: { contains: q.search, mode: 'insensitive' } }, { description: { contains: q.search, mode: 'insensitive' } }] } : {}) }, orderBy: [{ position: 'asc' }, { updatedAt: 'desc' }], include: { project: { select: { name: true } }, assignee: { select: { id: true, name: true, avatarInitials: true } }, comments: { orderBy: { createdAt: 'asc' }, include: { author: { select: { id: true, name: true, avatarInitials: true } } } }, subtasks: true, dependencies: true, dependents: true, activities: { orderBy: { createdAt: 'desc' }, take: 50 } } }) }
-export async function createTask(input: unknown) { const ctx = await context(true); const data = createTaskSchema.parse(input); await assertProject(data.projectId, ctx.organization.id); if (data.assigneeId) await assertMembers([data.assigneeId], ctx.organization.id); const max = await prisma.task.aggregate({ where: { organizationId: ctx.organization.id, projectId: data.projectId }, _max: { position: true } }); const task = await prisma.$transaction(async tx => { const t = await tx.task.create({ data: { ...data, organizationId: ctx.organization.id, creatorId: ctx.user.id, position: (max._max.position ?? 0) + 1 } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: t.id, projectId: t.projectId, action: 'task.created' }); if (t.assigneeId && t.assigneeId !== ctx.user.id) await tx.notification.create({ data: { organizationId: ctx.organization.id, userId: t.assigneeId, type: NotificationType.TASK, title: 'Task assigned', body: `You were assigned to ${t.title}.` } }); return t }); await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger: 'TASK_CREATED', entityId: task.id, actorId: ctx.user.id, eventId: `task.created:${task.id}`, payload: { taskId: task.id, projectId: task.projectId, actorId: ctx.user.id, status: task.status, priority: task.priority, assigneeId: task.assigneeId, dueAt: task.dueAt?.toISOString() ?? null, title: task.title, description: task.description } }); return task }
-export async function updateTask(input: unknown) { const ctx = await context(true); const data = updateTaskSchema.parse(input); const old = await assertTask(data.id, ctx.organization.id); if (data.projectId) await assertProject(data.projectId, ctx.organization.id); if (data.assigneeId) await assertMembers([data.assigneeId], ctx.organization.id); const { id, ...changes } = data; const task = await prisma.$transaction(async tx => { const t = await tx.task.update({ where: { id }, data: changes }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: id, projectId: t.projectId, action: 'task.updated', metadata: { before: { status: old.status }, changes } as Prisma.InputJsonValue }); if (t.assigneeId && t.assigneeId !== old.assigneeId && t.assigneeId !== ctx.user.id) await tx.notification.create({ data: { organizationId: ctx.organization.id, userId: t.assigneeId, type: NotificationType.TASK, title: 'Task assigned', body: `You were assigned to ${t.title}.` } }); return t }); const trigger = task.status === 'DONE' && old.status !== 'DONE' ? 'TASK_COMPLETED' : 'TASK_UPDATED'; await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger, entityId: task.id, actorId: ctx.user.id, eventId: `task.updated:${task.id}:${task.updatedAt.toISOString()}`, payload: { taskId: task.id, projectId: task.projectId, actorId: ctx.user.id, status: task.status, priority: task.priority, assigneeId: task.assigneeId, dueAt: task.dueAt?.toISOString() ?? null, title: task.title, description: task.description } }); return task }
-export async function duplicateTask(input: unknown) { const ctx = await context(true); const data = duplicateTaskSchema.parse(input); const source = await assertTask(data.id, ctx.organization.id); const projectId = data.projectId ?? source.projectId; await assertProject(projectId, ctx.organization.id); return createTask({ projectId, title: `${source.title} (copy)`, description: source.description, priority: source.priority, labels: source.labels, dueAt: source.dueAt, estimatedMinutes: source.estimatedMinutes, assigneeId: source.assigneeId, parentId: source.parentId }) }
-export async function deleteTask(input: unknown) { const ctx = await context(true); const { id } = taskIdSchema.parse(input); await assertTask(id, ctx.organization.id); return prisma.task.delete({ where: { id } }) }
-export async function archiveTask(input: unknown) { const ctx = await context(true); const { id } = taskIdSchema.parse(input); const task = await assertTask(id, ctx.organization.id); return prisma.$transaction(async tx => { const result = await tx.task.update({ where: { id }, data: { archivedAt: new Date() } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: id, projectId: task.projectId, action: 'task.archived' }); return result }) }
-export async function addTaskDependency(input: unknown) { const ctx = await context(true); const data = dependencySchema.parse(input); if (data.taskId === data.dependsOnId) throw new AppError('VALIDATION', 'A task cannot depend on itself.', 400); await assertTask(data.taskId, ctx.organization.id); await assertTask(data.dependsOnId, ctx.organization.id); const cycle = await prisma.$queryRaw<{ cycle: boolean }[]>`WITH RECURSIVE dependency_chain(id) AS (SELECT ${data.dependsOnId}::uuid UNION SELECT dependency."dependsOnId" FROM "TaskDependency" dependency JOIN dependency_chain chain ON dependency."taskId" = chain.id WHERE dependency."organizationId" = ${ctx.organization.id}::uuid) SELECT EXISTS(SELECT 1 FROM dependency_chain WHERE id = ${data.taskId}::uuid) AS cycle`; if (cycle[0]?.cycle) throw new AppError('VALIDATION', 'This dependency would create a cycle.', 400); return prisma.taskDependency.create({ data: { ...data, organizationId: ctx.organization.id } }) }
-export async function removeTaskDependency(input: unknown) { const ctx = await context(true); const data = dependencySchema.parse(input); await prisma.taskDependency.deleteMany({ where: { ...data, organizationId: ctx.organization.id } }); return { ok: true } }
-export async function addTaskComment(input: unknown) { const ctx = await context(true); const data = commentSchema.parse(input); const task = await assertTask(data.taskId, ctx.organization.id); const comment = await prisma.$transaction(async tx => { const comment = await tx.comment.create({ data: { ...data, organizationId: ctx.organization.id, authorId: ctx.user.id }, include: { author: { select: { id: true, name: true, avatarInitials: true } } } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: task.id, projectId: task.projectId, action: 'task.comment_added' }); if (task.assigneeId && task.assigneeId !== ctx.user.id) await tx.notification.create({ data: { organizationId: ctx.organization.id, userId: task.assigneeId, type: NotificationType.TASK, title: 'New task comment', body: `${ctx.user.name} commented on ${task.title}.` } }); return comment }); await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger: 'COMMENT_ADDED', entityId: task.id, actorId: ctx.user.id, eventId: `comment.added:${comment.id}`, payload: { taskId: task.id, projectId: task.projectId, actorId: ctx.user.id, body: comment.body } }); return comment }
-export async function updateTaskComment(input: unknown) { const ctx = await context(true); const data = commentUpdateSchema.parse(input); const comment = await prisma.comment.findFirst({ where: { id: data.id, taskId: data.taskId, organizationId: ctx.organization.id } }); if (!comment) throw new AppError('NOT_FOUND', 'Comment not found.', 404); if (comment.authorId !== ctx.user.id && ctx.membership.role !== MembershipRole.OWNER && ctx.membership.role !== MembershipRole.ADMIN) throw new AppError('FORBIDDEN', 'You can only edit your own comments.', 403); return prisma.comment.update({ where: { id: data.id }, data: { body: data.body } }) }
-export async function deleteTaskComment(input: unknown) { const ctx = await context(true); const data = commentUpdateSchema.pick({ id: true, taskId: true }).parse(input); const comment = await prisma.comment.findFirst({ where: { id: data.id, taskId: data.taskId, organizationId: ctx.organization.id } }); if (!comment) throw new AppError('NOT_FOUND', 'Comment not found.', 404); if (comment.authorId !== ctx.user.id && ctx.membership.role !== MembershipRole.OWNER && ctx.membership.role !== MembershipRole.ADMIN) throw new AppError('FORBIDDEN', 'You can only delete your own comments.', 403); await prisma.comment.delete({ where: { id: data.id } }); return { ok: true } }
-export async function createSubtask(input: unknown) { const ctx = await context(true); const data = subtaskSchema.parse(input); const parent = await assertTask(data.parentId, ctx.organization.id); if (parent.projectId !== data.projectId) throw new AppError('VALIDATION', 'A subtask must belong to its parent task project.', 400); return prisma.$transaction(async tx => { const child = await tx.task.create({ data: { ...data, organizationId: ctx.organization.id, creatorId: ctx.user.id, position: 0 } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: parent.id, projectId: parent.projectId, action: 'task.subtask_created', metadata: { subtaskId: child.id } }); return child }) }
-export async function completeSubtask(input: unknown) { const ctx = await context(true); const { id } = taskIdSchema.parse(input); const task = await assertTask(id, ctx.organization.id); if (!task.parentId) throw new AppError('VALIDATION', 'Task is not a subtask.', 400); return updateTask({ id: task.id, status: task.status === 'DONE' ? 'TODO' : 'DONE' }) }
-export async function deleteSubtask(input: unknown) { const ctx = await context(true); const { id } = taskIdSchema.parse(input); const task = await assertTask(id, ctx.organization.id); if (!task.parentId) throw new AppError('VALIDATION', 'Task is not a subtask.', 400); return deleteTask({ id }) }
+export async function createTask(input: unknown) { const ctx = await context('tasks:create'); const data = createTaskSchema.parse(input); await assertPlanCapacity(ctx.organization.id, 'tasks'); await assertProject(data.projectId, ctx.organization.id); if (data.assigneeId) await assertMembers([data.assigneeId], ctx.organization.id); const max = await prisma.task.aggregate({ where: { organizationId: ctx.organization.id, projectId: data.projectId }, _max: { position: true } }); const task = await prisma.$transaction(async tx => { const t = await tx.task.create({ data: { ...data, organizationId: ctx.organization.id, creatorId: ctx.user.id, position: (max._max.position ?? 0) + 1 } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: t.id, projectId: t.projectId, action: 'task.created' }); if (t.assigneeId && t.assigneeId !== ctx.user.id) await tx.notification.create({ data: { organizationId: ctx.organization.id, userId: t.assigneeId, type: NotificationType.TASK, title: 'Task assigned', body: `You were assigned to ${t.title}.` } }); return t }); await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger: 'TASK_CREATED', entityId: task.id, actorId: ctx.user.id, eventId: `task.created:${task.id}`, payload: { taskId: task.id, projectId: task.projectId, actorId: ctx.user.id, status: task.status, priority: task.priority, assigneeId: task.assigneeId, dueAt: task.dueAt?.toISOString() ?? null, title: task.title, description: task.description } }); return task }
+export async function updateTask(input: unknown) { const ctx = await context('tasks:update'); const data = updateTaskSchema.parse(input); const old = await assertTask(data.id, ctx.organization.id); if (data.projectId) await assertProject(data.projectId, ctx.organization.id); if (data.assigneeId) await assertMembers([data.assigneeId], ctx.organization.id); const { id, ...changes } = data; const task = await prisma.$transaction(async tx => { const t = await tx.task.update({ where: { id }, data: changes }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: id, projectId: t.projectId, action: 'task.updated', metadata: { before: { status: old.status }, changes } as Prisma.InputJsonValue }); if (t.assigneeId && t.assigneeId !== old.assigneeId && t.assigneeId !== ctx.user.id) await tx.notification.create({ data: { organizationId: ctx.organization.id, userId: t.assigneeId, type: NotificationType.TASK, title: 'Task assigned', body: `You were assigned to ${t.title}.` } }); return t }); const trigger = task.status === 'DONE' && old.status !== 'DONE' ? 'TASK_COMPLETED' : 'TASK_UPDATED'; await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger, entityId: task.id, actorId: ctx.user.id, eventId: `task.updated:${task.id}:${task.updatedAt.toISOString()}`, payload: { taskId: task.id, projectId: task.projectId, actorId: ctx.user.id, status: task.status, priority: task.priority, assigneeId: task.assigneeId, dueAt: task.dueAt?.toISOString() ?? null, title: task.title, description: task.description } }); return task }
+export async function duplicateTask(input: unknown) { const ctx = await context('tasks:create'); const data = duplicateTaskSchema.parse(input); const source = await assertTask(data.id, ctx.organization.id); const projectId = data.projectId ?? source.projectId; await assertProject(projectId, ctx.organization.id); return createTask({ projectId, title: `${source.title} (copy)`, description: source.description, priority: source.priority, labels: source.labels, dueAt: source.dueAt, estimatedMinutes: source.estimatedMinutes, assigneeId: source.assigneeId, parentId: source.parentId }) }
+export async function deleteTask(input: unknown) {
+  const ctx = await context('tasks:delete')
+  const { id } = taskIdSchema.parse(input)
+  await assertTask(id, ctx.organization.id)
+  return prisma.$transaction(async (tx) => {
+    await tx.auditLog.create({
+      data: { organizationId: ctx.organization.id, actorId: ctx.user.id, action: 'task.deleted', entityType: 'Task', entityId: id },
+    })
+    return tx.task.delete({ where: { id } })
+  })
+}
+export async function archiveTask(input: unknown) { const ctx = await context('tasks:update'); const { id } = taskIdSchema.parse(input); const task = await assertTask(id, ctx.organization.id); return prisma.$transaction(async tx => { const result = await tx.task.update({ where: { id }, data: { archivedAt: new Date() } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: id, projectId: task.projectId, action: 'task.archived' }); return result }) }
+export async function addTaskDependency(input: unknown) {
+  const ctx = await context('tasks:update')
+  const data = dependencySchema.parse(input)
+  if (data.taskId === data.dependsOnId) throw new AppError('VALIDATION', 'A task cannot depend on itself.', 400)
+  const task = await assertTask(data.taskId, ctx.organization.id)
+  await assertTask(data.dependsOnId, ctx.organization.id)
+  return prisma.$transaction(async (tx) => {
+    const cycle = await tx.$queryRaw<{ cycle: boolean }[]>`
+      WITH RECURSIVE dependency_chain(id) AS (
+        SELECT ${data.dependsOnId}::uuid
+        UNION
+        SELECT dependency."dependsOnId"
+        FROM "TaskDependency" dependency
+        JOIN dependency_chain chain ON dependency."taskId" = chain.id
+        WHERE dependency."organizationId" = ${ctx.organization.id}::uuid
+      )
+      SELECT EXISTS(SELECT 1 FROM dependency_chain WHERE id = ${data.taskId}::uuid) AS cycle
+    `
+    if (cycle[0]?.cycle) throw new AppError('VALIDATION', 'This dependency would create a cycle.', 400)
+    const dependency = await tx.taskDependency.create({ data: { ...data, organizationId: ctx.organization.id } })
+    await activity(tx, {
+      organizationId: ctx.organization.id,
+      actorId: ctx.user.id,
+      taskId: task.id,
+      projectId: task.projectId,
+      action: 'task.dependency_added',
+      metadata: { dependsOnId: data.dependsOnId },
+    })
+    return dependency
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+}
+export async function removeTaskDependency(input: unknown) {
+  const ctx = await context('tasks:update')
+  const data = dependencySchema.parse(input)
+  const task = await assertTask(data.taskId, ctx.organization.id)
+  return prisma.$transaction(async (tx) => {
+    const deleted = await tx.taskDependency.deleteMany({ where: { ...data, organizationId: ctx.organization.id } })
+    if (deleted.count) {
+      await activity(tx, {
+        organizationId: ctx.organization.id,
+        actorId: ctx.user.id,
+        taskId: task.id,
+        projectId: task.projectId,
+        action: 'task.dependency_removed',
+        metadata: { dependsOnId: data.dependsOnId },
+      })
+    }
+    return { ok: true }
+  })
+}
+export async function addTaskComment(input: unknown) { const ctx = await context('tasks:update'); const data = commentSchema.parse(input); const task = await assertTask(data.taskId, ctx.organization.id); const comment = await prisma.$transaction(async tx => { const comment = await tx.comment.create({ data: { ...data, organizationId: ctx.organization.id, authorId: ctx.user.id }, include: { author: { select: { id: true, name: true, avatarInitials: true } } } }); await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: task.id, projectId: task.projectId, action: 'task.comment_added' }); if (task.assigneeId && task.assigneeId !== ctx.user.id) await tx.notification.create({ data: { organizationId: ctx.organization.id, userId: task.assigneeId, type: NotificationType.TASK, title: 'New task comment', body: `${ctx.user.name} commented on ${task.title}.` } }); return comment }); await emitWorkflowEvent({ organizationId: ctx.organization.id, trigger: 'COMMENT_ADDED', entityId: task.id, actorId: ctx.user.id, eventId: `comment.added:${comment.id}`, payload: { taskId: task.id, projectId: task.projectId, actorId: ctx.user.id, body: comment.body } }); return comment }
+export async function updateTaskComment(input: unknown) {
+  const ctx = await context('tasks:update')
+  const data = commentUpdateSchema.parse(input)
+  const comment = await prisma.comment.findFirst({
+    where: { id: data.id, taskId: data.taskId, organizationId: ctx.organization.id },
+    select: { id: true, authorId: true, taskId: true, task: { select: { projectId: true } } },
+  })
+  if (!comment) throw new AppError('NOT_FOUND', 'Comment not found.', 404)
+  if (comment.authorId !== ctx.user.id && ctx.membership.role !== MembershipRole.OWNER && ctx.membership.role !== MembershipRole.ADMIN) {
+    throw new AppError('FORBIDDEN', 'You can only edit your own comments.', 403)
+  }
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.comment.update({ where: { id: data.id }, data: { body: data.body } })
+    await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: comment.taskId, projectId: comment.task.projectId, action: 'task.comment_updated' })
+    return updated
+  })
+}
+export async function deleteTaskComment(input: unknown) {
+  const ctx = await context('tasks:update')
+  const data = commentUpdateSchema.pick({ id: true, taskId: true }).parse(input)
+  const comment = await prisma.comment.findFirst({
+    where: { id: data.id, taskId: data.taskId, organizationId: ctx.organization.id },
+    select: { id: true, authorId: true, taskId: true, task: { select: { projectId: true } } },
+  })
+  if (!comment) throw new AppError('NOT_FOUND', 'Comment not found.', 404)
+  if (comment.authorId !== ctx.user.id && ctx.membership.role !== MembershipRole.OWNER && ctx.membership.role !== MembershipRole.ADMIN) {
+    throw new AppError('FORBIDDEN', 'You can only delete your own comments.', 403)
+  }
+  await prisma.$transaction(async (tx) => {
+    await tx.comment.delete({ where: { id: data.id } })
+    await activity(tx, { organizationId: ctx.organization.id, actorId: ctx.user.id, taskId: comment.taskId, projectId: comment.task.projectId, action: 'task.comment_deleted' })
+  })
+  return { ok: true }
+}
+export async function createSubtask(input: unknown) {
+  const ctx = await context('tasks:create')
+  const data = subtaskSchema.parse(input)
+  await assertPlanCapacity(ctx.organization.id, 'tasks')
+  const parent = await assertTask(data.parentId, ctx.organization.id)
+  if (parent.projectId !== data.projectId) throw new AppError('VALIDATION', 'A subtask must belong to its parent task project.', 400)
+  const child = await prisma.$transaction(async (tx) => {
+    const task = await tx.task.create({
+      data: { ...data, organizationId: ctx.organization.id, creatorId: ctx.user.id, position: 0 },
+    })
+    await activity(tx, {
+      organizationId: ctx.organization.id,
+      actorId: ctx.user.id,
+      taskId: parent.id,
+      projectId: parent.projectId,
+      action: 'task.subtask_created',
+      metadata: { subtaskId: task.id },
+    })
+    return task
+  })
+  await emitWorkflowEvent({
+    organizationId: ctx.organization.id,
+    trigger: 'TASK_CREATED',
+    entityId: child.id,
+    actorId: ctx.user.id,
+    eventId: `task.created:${child.id}`,
+    payload: {
+      taskId: child.id,
+      projectId: child.projectId,
+      actorId: ctx.user.id,
+      status: child.status,
+      priority: child.priority,
+      assigneeId: child.assigneeId,
+      dueAt: child.dueAt?.toISOString() ?? null,
+      title: child.title,
+      description: child.description,
+    },
+  })
+  return child
+}
+export async function completeSubtask(input: unknown) { const ctx = await context('tasks:update'); const { id } = taskIdSchema.parse(input); const task = await assertTask(id, ctx.organization.id); if (!task.parentId) throw new AppError('VALIDATION', 'Task is not a subtask.', 400); return updateTask({ id: task.id, status: task.status === 'DONE' ? 'TODO' : 'DONE' }) }
+export async function deleteSubtask(input: unknown) { const ctx = await context('tasks:delete'); const { id } = taskIdSchema.parse(input); const task = await assertTask(id, ctx.organization.id); if (!task.parentId) throw new AppError('VALIDATION', 'Task is not a subtask.', 400); return deleteTask({ id }) }
 export async function listTaskActivity(input: unknown) { const ctx = await context(); const query = activityQuerySchema.parse(input); if (query.taskId) await assertTask(query.taskId, ctx.organization.id); if (query.projectId) await assertProject(query.projectId, ctx.organization.id); return prisma.activityHistory.findMany({ where: { organizationId: ctx.organization.id, ...(query.taskId ? { taskId: query.taskId } : {}), ...(query.projectId ? { projectId: query.projectId } : {}) }, orderBy: { createdAt: 'desc' }, take: query.limit, include: { actor: { select: { id: true, name: true, avatarInitials: true } } } }) }
