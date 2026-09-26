@@ -1,4 +1,4 @@
-export type WorkflowEmail = { to: string; subject: string; body: string }
+export type WorkflowEmail = { to: string; subject: string; body: string; idempotencyKey?: string }
 
 export interface WorkflowEmailProvider {
   send(email: WorkflowEmail): Promise<void>
@@ -16,6 +16,7 @@ export function getWorkflowEmailProvider(): WorkflowEmailProvider | null {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
+          ...(email.idempotencyKey ? { 'Idempotency-Key': email.idempotencyKey } : {}),
         },
         body: JSON.stringify({ from, to: [email.to], subject: email.subject, text: email.body }),
       })

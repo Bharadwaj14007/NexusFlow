@@ -131,6 +131,7 @@ model User {
   taskActivities     ActivityHistory[] @relation("ActivityActor")
   conversationsCreated AiConversation[] @relation("ConversationCreator")
   aiUsage             AiUsage[]
+  createdWorkflows    Workflow[] @relation("WorkflowCreator")
 }
 
 model Organization {
@@ -277,6 +278,7 @@ model Task {
   labels         String[]
   position       Float          @default(0)
   parentId       String?        @db.Uuid
+  workflowActionKey String?     @unique
   archivedAt     DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
@@ -358,6 +360,7 @@ model Comment {
   taskId         String   @db.Uuid
   authorId       String   @db.Uuid
   body           String
+  workflowActionKey String? @unique
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -445,6 +448,7 @@ model DocumentChunk {
 model Workflow {
   id             String         @id @default(uuid()) @db.Uuid
   organizationId String         @db.Uuid
+  createdById    String?        @db.Uuid
   name           String
   description    String         @default("")
   status         WorkflowStatus @default(DRAFT)
@@ -452,11 +456,13 @@ model Workflow {
   schedule       WorkflowScheduleFrequency @default(NONE)
   scheduleTime   String?
   scheduleDay    Int?
+  scheduleTimezone String @default("UTC")
   lastScheduledAt DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
   organization Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy    User?               @relation("WorkflowCreator", fields: [createdById], references: [id], onDelete: SetNull)
   executions   WorkflowExecution[]
 
   @@index([organizationId])
@@ -498,6 +504,7 @@ model Notification {
   type           NotificationType @default(INFO)
   title          String
   body           String
+  workflowActionKey String?       @unique
   readAt         DateTime?
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
@@ -539,10 +546,24 @@ model ApiKey {
   expiresAt      DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  rateLimitBuckets ApiRateLimitBucket[]
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+}
+
+model ApiRateLimitBucket {
+  id           String   @id @default(uuid()) @db.Uuid
+  apiKeyId     String   @db.Uuid
+  windowStart  DateTime
+  requestCount Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+
+  @@unique([apiKeyId, windowStart])
+  @@index([windowStart])
 }
 
 model Integration {
@@ -551,6 +572,8 @@ model Integration {
   provider       IntegrationProvider
   status         IntegrationStatus   @default(DISCONNECTED)
   config         Json                @default("{}")
+  credentialsEncrypted String?
+  lastCheckedAt  DateTime?
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
 
@@ -564,9 +587,14 @@ model Subscription {
   id                 String             @id @default(uuid()) @db.Uuid
   organizationId     String             @unique @db.Uuid
   plan               SubscriptionPlan   @default(FREE)
+  pendingPlan        SubscriptionPlan?
   status             SubscriptionStatus @default(ACTIVE)
   currentPeriodStart DateTime?
   currentPeriodEnd   DateTime?
+  providerSubscriptionId String?          @unique
+  providerCustomerId     String?
+  providerPlanId         String?
+  cancelAtPeriodEnd      Boolean          @default(false)
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
@@ -614,6 +642,8 @@ model RazorpayWebhookEvent {
   id         String   @id @default(uuid()) @db.Uuid
   eventId    String   @unique
   eventType  String
+  processedAt DateTime?
+  error       String?
   receivedAt DateTime @default(now())
 
   @@index([receivedAt])

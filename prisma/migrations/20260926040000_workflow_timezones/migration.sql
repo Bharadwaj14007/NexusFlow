@@ -1,0 +1,2 @@
+ALTER TABLE "Workflow"
+ADD COLUMN "scheduleTimezone" TEXT NOT NULL DEFAULT 'UTC';

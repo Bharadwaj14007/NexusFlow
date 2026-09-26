@@ -17,6 +17,12 @@ export const workflowScheduleSchema = z.object({
   frequency: z.enum(['NONE', 'DAILY', 'WEEKLY']).default('NONE'),
   time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   day: z.number().int().min(0).max(6).optional(),
+  timezone: z.string().trim().min(1).max(100).default('UTC').refine((timezone) => {
+    try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }); return true } catch { return false }
+  }, 'Choose a valid IANA time zone.'),
+}).superRefine((schedule, context) => {
+  if (schedule.frequency !== 'NONE' && !schedule.time) context.addIssue({ code: 'custom', path: ['time'], message: 'Choose a schedule time.' })
+  if (schedule.frequency === 'WEEKLY' && schedule.day === undefined) context.addIssue({ code: 'custom', path: ['day'], message: 'Choose a weekday for weekly schedules.' })
 })
 
 export const workflowConditionSchema = z.object({

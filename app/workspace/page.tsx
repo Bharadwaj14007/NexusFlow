@@ -57,6 +57,7 @@ export default async function WorkspacePage() {
         schedule: workflow.schedule,
         scheduleTime: workflow.scheduleTime,
         scheduleDay: workflow.scheduleDay,
+        scheduleTimezone: workflow.scheduleTimezone,
         definition: workflow.definition as { trigger: string; conditions: { field: string; operator: string; value?: string }[]; actions: { type: string; title?: string; body?: string; projectId?: string; taskId?: string }[] },
         _count: workflow._count,
       }))}

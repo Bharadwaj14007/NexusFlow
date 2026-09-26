@@ -1,4 +1,5 @@
-CREATE EXTENSION IF NOT EXISTS vector;
+-- Note: vector extension commented out for portability; embeddings stored as JSON instead
+-- CREATE EXTENSION IF NOT EXISTS vector;
 ALTER TABLE "Document" ADD COLUMN "content" TEXT;
 
 CREATE TABLE "AiConversation" (
@@ -26,7 +27,7 @@ CREATE TABLE "DocumentChunk" (
   "organizationId" UUID NOT NULL,
   "chunkIndex" INTEGER NOT NULL,
   "content" TEXT NOT NULL,
-  "embedding" vector(1536),
+  "embedding" JSONB,
   "embeddingModel" TEXT,
   "dimensions" INTEGER,
   "metadata" JSONB,

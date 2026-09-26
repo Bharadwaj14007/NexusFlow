@@ -1,8 +1,11 @@
 import { prisma } from '@/lib/db'
 import { AppError } from '@/lib/errors'
-import { requireOrganization } from '@/lib/auth/guards'
+import { requireOrganization, requireRole } from '@/lib/auth/guards'
+import { MembershipRole } from '@prisma/client'
 import { conversationSchema, documentSchema, messageSchema } from '@/lib/validation/ai'
 import { recordAiUsage, releaseAiRequest, reserveAiRequest } from '@/lib/services/usage.service'
+import { assertPlanCapacity } from '@/lib/services/plan-limits'
+import { deleteOriginalDocument, storeOriginalDocument } from '@/lib/services/document-storage'
 
 function apiKey() {
   const key = process.env.OPENAI_API_KEY
@@ -23,8 +26,8 @@ async function openai(path: string, body: unknown): Promise<OpenAIResponse> {
     body: JSON.stringify(body),
   })
   if (!response.ok) {
-    const detail = await response.text()
-    throw new AppError('UPSTREAM', `OpenAI request failed (${response.status}). ${detail.slice(0, 240)}`, 502)
+    console.error('OpenAI API request failed.', { status: response.status, path })
+    throw new AppError('UPSTREAM', `AI provider request failed (${response.status}).`, 502)
   }
   return response.json() as Promise<OpenAIResponse>
 }
@@ -64,30 +67,84 @@ export async function deleteConversation(input: unknown) {
 }
 
 export async function indexDocument(input: unknown) {
-  const ctx = await requireOrganization()
+  const ctx = await requireRole(MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.MANAGER, MembershipRole.MEMBER)
   const data = documentSchema.parse(input)
+  await assertPlanCapacity(ctx.organization.id, 'documents')
   const document = await prisma.document.create({
     data: { organizationId: ctx.organization.id, uploaderId: ctx.user.id, name: data.name, content: data.content, mimeType: data.mimeType, status: 'PROCESSING' },
   })
-  return indexDocumentRecord(ctx.organization.id, document.id, data.content)
+  return indexDocumentRecord(ctx.organization.id, document.id, data.content, ctx.user.id)
+}
+
+export async function uploadDocumentFile(file: File) {
+  const ctx = await requireRole(MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.MANAGER, MembershipRole.MEMBER)
+  await assertPlanCapacity(ctx.organization.id, 'documents')
+  if (!file.size || file.size > 2_000_000) throw new AppError('VALIDATION', 'Document uploads must be between 1 byte and 2 MB.', 400)
+  if (file.name.length > 255) throw new AppError('VALIDATION', 'Document filename must be 255 characters or fewer.', 400)
+  const textTypes = new Set(['text/plain', 'text/markdown', 'text/csv', 'text/html', 'text/xml', 'application/json', 'application/xml'])
+  const textExtensions = /\.(txt|md|markdown|csv|json|xml|html|log)$/i
+  if (!textTypes.has(file.type) && !textExtensions.test(file.name)) {
+    throw new AppError('VALIDATION', 'Upload a text, Markdown, CSV, JSON, XML, HTML, or log file for indexing.', 415)
+  }
+  let content: string
+  try {
+    content = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer())
+  } catch {
+    throw new AppError('VALIDATION', 'The document must contain valid UTF-8 text.', 400)
+  }
+  if (!content.trim()) throw new AppError('VALIDATION', 'The uploaded document is empty.', 400)
+  if (content.length > 2_000_000) throw new AppError('VALIDATION', 'The extracted document exceeds the 2 MB indexing limit.', 413)
+  const storageKey = await storeOriginalDocument(file, ctx.organization.id)
+  let document: Awaited<ReturnType<typeof prisma.document.create>>
+  try {
+    document = await prisma.document.create({
+      data: {
+        organizationId: ctx.organization.id,
+        uploaderId: ctx.user.id,
+        name: file.name,
+        content,
+        status: 'PROCESSING',
+        sizeBytes: file.size,
+        mimeType: file.type || 'text/plain',
+        storageKey,
+      },
+    })
+  } catch (error) {
+    if (storageKey) {
+      try {
+        await deleteOriginalDocument(storageKey)
+      } catch (cleanupError) {
+        console.error('Unable to clean up an uploaded document after database failure.', {
+          errorName: cleanupError instanceof Error ? cleanupError.name : 'UnknownError',
+        })
+      }
+    }
+    throw error
+  }
+  return indexDocumentRecord(ctx.organization.id, document.id, content, ctx.user.id)
 }
 
 export async function reindexDocumentRecord(input: { documentId: string; content: string }) {
-  const ctx = await requireOrganization()
+  const ctx = await requireRole(MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.MANAGER, MembershipRole.MEMBER)
   const document = await prisma.document.findFirst({
     where: { id: input.documentId, organizationId: ctx.organization.id },
     select: { id: true },
   })
   if (!document) throw new AppError('NOT_FOUND', 'Document not found.', 404)
-  return indexDocumentRecord(ctx.organization.id, document.id, input.content)
+  return indexDocumentRecord(ctx.organization.id, document.id, input.content, ctx.user.id)
 }
 
-async function indexDocumentRecord(organizationId: string, documentId: string, content: string) {
+async function indexDocumentRecord(organizationId: string, documentId: string, content: string, userId: string) {
+  let usageId: string | undefined
+  let embeddingSucceeded = false
   try {
+    usageId = await reserveAiRequest(organizationId)
     await prisma.document.update({ where: { id: documentId }, data: { content, status: 'PROCESSING' } })
     const chunks = content.match(/[\s\S]{1,1800}(?:\s|$)/g) ?? [content]
     const embeddingModel = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small'
     const embeddingResponse = await openai('embeddings', { model: embeddingModel, input: chunks })
+    embeddingSucceeded = true
+    await recordAiUsage({ organizationId, userId, model: embeddingModel, requestType: 'EMBEDDING', inputTokens: embeddingResponse.usage?.prompt_tokens })
     await prisma.$transaction(async (tx) => {
       await tx.documentChunk.deleteMany({ where: { documentId, organizationId } })
       for (let index = 0; index < chunks.length; index += 1) {
@@ -98,7 +155,12 @@ async function indexDocumentRecord(organizationId: string, documentId: string, c
       await tx.document.update({ where: { id: documentId }, data: { status: 'READY' } })
     })
   } catch (error) {
-    await prisma.document.update({ where: { id: documentId }, data: { status: 'FAILED' } }).catch(() => undefined)
+    if (usageId && !embeddingSucceeded) await releaseAiRequest(usageId)
+    try {
+      await prisma.document.update({ where: { id: documentId }, data: { status: 'FAILED' } })
+    } catch (statusError) {
+      console.error('Unable to record document indexing failure.', { errorName: statusError instanceof Error ? statusError.name : 'UnknownError' })
+    }
     throw error
   }
   return prisma.document.findUniqueOrThrow({ where: { id: documentId }, select: { id: true, name: true, status: true, createdAt: true } })

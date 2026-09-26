@@ -1,6 +1,7 @@
 import { AiRequestType } from '@prisma/client'
 import { prisma } from '@/lib/db'
 import { AppError } from '@/lib/errors'
+import { getEffectivePlan, planLimits } from '@/lib/services/plan-limits'
 
 function utcMonth(now = new Date()) {
   const periodStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
@@ -9,16 +10,16 @@ function utcMonth(now = new Date()) {
 }
 
 export async function reserveAiRequest(organizationId: string) {
-  const { periodStart, periodEnd } = utcMonth()
+  const [{ periodStart, periodEnd }, plan] = [utcMonth(), await getEffectivePlan(organizationId)]
+  const aiRequestLimit = planLimits[plan].aiRequests
   const usage = await prisma.usage.upsert({
     where: { organizationId_periodStart: { organizationId, periodStart } },
-    create: { organizationId, periodStart, periodEnd },
-    update: {},
+    create: { organizationId, periodStart, periodEnd, aiRequestLimit },
+    update: { aiRequestLimit },
     select: { id: true },
   })
-  const quota = await prisma.usage.findUniqueOrThrow({ where: { id: usage.id }, select: { aiRequestLimit: true } })
   const reserved = await prisma.usage.updateMany({
-    where: { id: usage.id, aiRequests: { lt: quota.aiRequestLimit } },
+    where: { id: usage.id, aiRequests: { lt: aiRequestLimit } },
     data: { aiRequests: { increment: 1 } },
   })
   if (!reserved.count) throw new AppError('RATE_LIMITED', 'This organization has reached its monthly AI request limit.', 429)
