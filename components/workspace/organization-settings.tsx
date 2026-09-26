@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { signOutAction, updateOrganizationAction } from '@/app/actions/auth'
 import { Button } from '@/components/ui/button'
+import SecuritySessions from '@/components/workspace/security-sessions'
 
 function inputClass() {
   return 'rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring'
@@ -23,6 +24,7 @@ export function OrganizationSettings({
   const [pending, setPending] = useState(false)
 
   return (
+    <>
     <form
       className="flex flex-col gap-4"
       onSubmit={async (event) => {
@@ -58,5 +60,7 @@ export function OrganizationSettings({
         <Button type="button" variant="outline" onClick={() => void signOutAction()}>Sign out</Button>
       </div>
     </form>
+    <SecuritySessions />
+    </>
   )
 }

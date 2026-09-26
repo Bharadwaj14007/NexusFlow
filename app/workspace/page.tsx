@@ -68,6 +68,7 @@ export default async function WorkspacePage() {
         email: ctx.user.email,
         avatarInitials: ctx.user.avatarInitials ?? initialsFromName(ctx.user.name),
         role: roleLabel(ctx.membership.role),
+        unreadCount: notifications.filter((notification) => notification.readAt === null).length,
       }}
       organization={{
         id: ctx.organization.id,

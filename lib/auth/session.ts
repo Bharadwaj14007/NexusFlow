@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { prisma } from '@/lib/db'
 import { SESSION_COOKIE, SESSION_MAX_AGE_SECONDS } from '@/lib/auth/constants'
 
@@ -35,6 +35,7 @@ export async function clearSessionCookie() {
 export async function createUserSession(userId: string, organizationId?: string | null) {
   const token = generateSessionToken()
   const expiresAt = new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000)
+  const requestHeaders = await headers()
 
   await prisma.session.create({
     data: {
@@ -42,6 +43,7 @@ export async function createUserSession(userId: string, organizationId?: string 
       tokenHash: hashSessionToken(token),
       currentOrganizationId: organizationId ?? null,
       expiresAt,
+      userAgent: requestHeaders.get('user-agent')?.slice(0, 500) ?? null,
     },
   })
 

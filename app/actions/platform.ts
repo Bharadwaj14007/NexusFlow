@@ -15,6 +15,7 @@ function action(fn: (input?: unknown) => Promise<unknown>) {
   }
 }
 export const listMembersAction = action(service.listMembers)
+export const listPendingInvitationsAction = action(service.listPendingInvitations)
 export const inviteMemberAction = action(service.inviteMember)
 export const revokeInvitationAction = action(service.revokeInvitation)
 export const acceptInvitationAction = action(service.acceptInvitation)
@@ -30,3 +31,4 @@ export const createApiKeyAction = action(service.createApiKey)
 export const revokeApiKeyAction = action(service.revokeApiKey)
 export const searchOrganizationAction = action(service.searchOrganization)
 export const listAuditLogsAction = action(service.listAuditLogs)
+export const getWorkspaceMetricsAction = action(service.getWorkspaceMetrics)

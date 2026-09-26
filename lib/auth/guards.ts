@@ -2,6 +2,7 @@ import { MembershipRole } from '@prisma/client'
 import { redirect } from 'next/navigation'
 import { AppError } from '@/lib/errors'
 import { getAuthContext, type AuthContext } from '@/lib/auth/context'
+import { hasPermission, type Permission } from '@/lib/auth/permissions'
 
 export type OrganizationContext = AuthContext & {
   organization: NonNullable<AuthContext['organization']>
@@ -23,6 +24,14 @@ export async function requireOrganization(): Promise<OrganizationContext> {
 export async function requireRole(...roles: MembershipRole[]): Promise<OrganizationContext> {
   const ctx = await requireOrganization()
   if (!roles.includes(ctx.membership.role)) {
+    throw new AppError('FORBIDDEN', 'You do not have permission to do that.', 403)
+  }
+  return ctx
+}
+
+export async function requirePermission(permission: Permission): Promise<OrganizationContext> {
+  const ctx = await requireOrganization()
+  if (!hasPermission(ctx.membership.role, permission)) {
     throw new AppError('FORBIDDEN', 'You do not have permission to do that.', 403)
   }
   return ctx

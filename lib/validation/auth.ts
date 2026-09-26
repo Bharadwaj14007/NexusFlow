@@ -7,7 +7,20 @@ export const signInSchema = z.object({
   password: z.string().min(8, 'Password must be at least 8 characters.'),
 })
 
-export const signUpSchema = signInSchema
+export const signUpSchema = signInSchema.extend({
+  name: z.string().trim().min(2, 'Enter your name.').max(100, 'Name is too long.'),
+})
+
+export const forgotPasswordSchema = z.object({ email: emailSchema })
+export const resetPasswordSchema = z.object({
+  token: z.string().min(32).max(200),
+  password: z.string().min(8, 'Password must be at least 8 characters.').max(128),
+})
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(8),
+  password: z.string().min(8, 'Password must be at least 8 characters.').max(128),
+})
+export const sessionIdSchema = z.object({ id: z.string().uuid() })
 
 export const onboardingSchema = z.object({
   name: z.string().trim().min(2, 'Enter your name.'),

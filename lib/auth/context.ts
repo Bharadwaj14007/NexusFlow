@@ -48,6 +48,10 @@ export async function getAuthContext(): Promise<AuthContext | null> {
     return null
   }
 
+  if (Date.now() - session.lastActiveAt.getTime() >= 5 * 60_000) {
+    await prisma.session.update({ where: { id: session.id }, data: { lastActiveAt: new Date() } })
+  }
+
   const memberships = await getMembershipsForUser(session.userId)
   const current = resolveCurrentOrganization(memberships, session.currentOrganizationId)
 
