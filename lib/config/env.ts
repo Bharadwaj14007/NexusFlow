@@ -2,8 +2,10 @@ import { z } from 'zod'
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
-  AUTH_SECRET: z.string().min(1),
+  AUTH_SECRET: z.string().min(1).optional(),
   OPENAI_API_KEY: z.string().min(1).optional(),
+  OPENAI_CHAT_MODEL: z.string().min(1).optional(),
+  OPENAI_EMBEDDING_MODEL: z.string().min(1).optional(),
   RESEND_API_KEY: z.string().min(1).optional(),
   RESEND_FROM_EMAIL: z.string().email().optional(),
   CLOUDINARY_CLOUD_NAME: z.string().min(1).optional(),

@@ -4,22 +4,28 @@ import { FormEvent, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, Check, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { completeOnboardingAction, signInAction, signUpAction } from '@/app/actions/auth'
+import { completeOnboardingAction, requestPasswordResetAction, resetPasswordAction, signInAction, signUpAction } from '@/app/actions/auth'
 
-type Mode = 'signin' | 'signup' | 'forgot' | 'onboarding'
+type Mode = 'signin' | 'signup' | 'forgot' | 'reset' | 'onboarding'
 
 export default function AuthScreen({
   initialMode = 'signin',
   defaultName = 'Alex Morgan',
   defaultOrganization = 'Nexus Labs',
+  initialResetToken = '',
+  inviteToken = '',
 }: {
   initialMode?: Mode
   defaultName?: string
   defaultOrganization?: string
+  initialResetToken?: string
+  inviteToken?: string
 }) {
   const [mode, setMode] = useState<Mode>(initialMode)
-  const [email, setEmail] = useState('alex@nexusflow.dev')
-  const [password, setPassword] = useState('password123')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [resetToken] = useState(initialResetToken)
   const [name, setName] = useState(defaultName)
   const [organization, setOrganization] = useState(defaultOrganization)
   const [organizationType, setOrganizationType] = useState('Technology')
@@ -32,16 +38,34 @@ export default function AuthScreen({
     event.preventDefault()
     setError('')
     if (!email.includes('@')) return setError('Enter a valid work email.')
-    if (mode !== 'forgot' && password.length < 8) return setError('Password must be at least 8 characters.')
     if (mode === 'forgot') {
-      setMessage('Reset instructions sent. Check your inbox.')
+      setLoading(true)
+      const result = await requestPasswordResetAction({ email })
+      setLoading(false)
+      if ('error' in result) setError(result.error)
+      else setMessage('If an account exists for this email, password reset instructions will be sent when available.')
+      return
+    }
+    if (password.length < 8) return setError('Password must be at least 8 characters.')
+    if (mode === 'reset') {
+      if (password !== confirmPassword) return setError('Passwords do not match.')
+      setLoading(true)
+      const result = await resetPasswordAction({ token: resetToken, password })
+      setLoading(false)
+      if ('error' in result) setError(result.error)
+      else {
+        setMode('signin')
+        setPassword('')
+        setMessage('Password reset. Sign in with your new password.')
+      }
       return
     }
 
     setLoading(true)
+    const returnTo = inviteToken ? `/invitations/${inviteToken}` : undefined
     const result = mode === 'signup'
-      ? await signUpAction({ name, email, password })
-      : await signInAction({ email, password })
+      ? await signUpAction({ name, email, password, returnTo })
+      : await signInAction({ email, password, returnTo })
     setLoading(false)
     if (result?.error) setError(result.error)
   }
@@ -97,8 +121,8 @@ export default function AuthScreen({
     </main>
   )
 
-  const title = mode === 'signin' ? 'Welcome back' : mode === 'signup' ? 'Create your workspace' : 'Reset your password'
-  const subtitle = mode === 'signin' ? 'Sign in to continue to your operating system.' : mode === 'signup' ? 'Start organizing work in one connected place.' : 'We will send a secure reset link to your email.'
+  const title = mode === 'signin' ? 'Welcome back' : mode === 'signup' ? 'Create your workspace' : mode === 'reset' ? 'Choose a new password' : 'Reset your password'
+  const subtitle = mode === 'signin' ? 'Sign in to continue to your operating system.' : mode === 'signup' ? 'Start organizing work in one connected place.' : mode === 'reset' ? 'Choose a new password for your account.' : 'We will send a secure reset link to your email.'
   return (
     <main className="grid min-h-screen bg-background text-foreground lg:grid-cols-2">
       <section className="hidden flex-col justify-between bg-foreground p-10 text-background lg:flex">
@@ -120,8 +144,8 @@ export default function AuthScreen({
           </div>
           <form className="flex flex-col gap-4" onSubmit={submit}>
             {mode === 'signup' && <label className="flex flex-col gap-1.5 text-sm font-medium">Your name<input value={name} onChange={e=>setName(e.target.value)} className="rounded-md border border-border bg-background px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>}
-            <label className="flex flex-col gap-1.5 text-sm font-medium">Work email<input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="rounded-md border border-border bg-background px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>
-            {mode !== 'forgot' && (
+            {mode !== 'reset' && <label className="flex flex-col gap-1.5 text-sm font-medium">Work email<input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="rounded-md border border-border bg-background px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>}
+            {mode !== 'forgot' && mode !== 'reset' && (
               <label className="flex flex-col gap-1.5 text-sm font-medium">Password
                 <div className="flex items-center rounded-md border border-border focus-within:ring-2 focus-within:ring-ring">
                   <input type={showPassword?'text':'password'} value={password} onChange={e=>setPassword(e.target.value)} className="min-w-0 flex-1 bg-transparent px-3 py-2.5 outline-none" />
@@ -129,11 +153,15 @@ export default function AuthScreen({
                 </div>
               </label>
             )}
+            {mode === 'reset' && <>
+              <label className="flex flex-col gap-1.5 text-sm font-medium">New password<input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="new-password" className="rounded-md border border-border bg-background px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium">Confirm new password<input type="password" value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} autoComplete="new-password" className="rounded-md border border-border bg-background px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring" /></label>
+            </>}
             {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
             {message&&<p role="status" className="text-sm text-emerald-600">{message}</p>}
-            <Button disabled={loading} type="submit">{loading&&<Loader2 className="animate-spin" data-icon="inline-start"/>}{mode==='forgot'?'Send reset link':mode==='signin'?'Sign in':'Create account'} <ArrowRight data-icon="inline-end" /></Button>
+            <Button disabled={loading} type="submit">{loading&&<Loader2 className="animate-spin" data-icon="inline-start"/>}{mode==='forgot'?'Send reset link':mode==='reset'?'Update password':mode==='signin'?'Sign in':'Create account'} <ArrowRight data-icon="inline-end" /></Button>
           </form>
-          <div className="mt-6 flex flex-wrap gap-2 text-sm text-muted-foreground">{mode==='signin'?<><span>New to NexusFlow?</span><button onClick={()=>setMode('signup')} className="font-medium text-primary">Create an account</button><button onClick={()=>setMode('forgot')} className="basis-full text-left text-xs hover:text-foreground">Forgot password?</button></>:<button onClick={()=>setMode('signin')} className="font-medium text-primary">Back to sign in</button>}</div>
+          <div className="mt-6 flex flex-wrap gap-2 text-sm text-muted-foreground">{mode==='signin'?<><span>New to NexusFlow?</span><button type="button" onClick={()=>setMode('signup')} className="font-medium text-primary">Create an account</button><button type="button" onClick={()=>{setMessage('');setMode('forgot')}} className="basis-full text-left text-xs hover:text-foreground">Forgot your password?</button></>:<button type="button" onClick={()=>setMode('signin')} className="font-medium text-primary">Back to sign in</button>}</div>
         </div>
       </section>
     </main>

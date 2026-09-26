@@ -1,7 +1,8 @@
 import { z } from 'zod'
 
 export const memberRoleSchema = z.enum(['OWNER', 'ADMIN', 'MANAGER', 'MEMBER', 'VIEWER'])
-export const inviteSchema = z.object({ email: z.string().email(), role: memberRoleSchema.default('MEMBER') })
+export const inviteRoleSchema = z.enum(['ADMIN', 'MANAGER', 'MEMBER', 'VIEWER'])
+export const inviteSchema = z.object({ email: z.string().email(), role: inviteRoleSchema.default('MEMBER') })
 export const invitationTokenSchema = z.object({ token: z.string().min(20).max(200) })
 export const memberIdSchema = z.object({ userId: z.string().uuid() })
 export const notificationIdSchema = z.object({ id: z.string().uuid() })
